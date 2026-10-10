@@ -63,3 +63,70 @@ necessary native CI dispatch. No tags/releases/main/device writes occur here.
 Pinned Go 1.25.5 requires a standalone source checkout with a real `.git` directory for VCS stamping. The producer rejects worktree gitfiles before downloading or building; the final binary must still carry the exact source SHA and `vcs.modified=false`.
 
 Go 1.25.5 also stamps the root module pseudo-version from available Git tags. Only `v0.0.0-20261010200656-aafc521b745e` (untagged shallow CI) and `v1.15.0-alpha.11.0.20261010200656-aafc521b745e` (upstream alpha.11 ancestor present) are accepted. Both require actual `vcs=git`, full `aafc` revision, commit time `2026-10-10T20:06:56Z` and clean state. Observed root versions remain evidence; they do not replace the stable common source identity or application version.
+
+
+## Offline source and final consumer contract
+
+The technical a451 four-native run 38086801501 has completed successfully.
+Its receipts remain technical evidence. Do not rerun that matrix or rename its
+version, BuildID or receipt schema to an App contract.
+
+`polaris-dns-publication-contract.json` prepares desktop role tag
+`polaris-v1.15.0-alpha.11-2` and final core version
+`1.15.0-alpha.11.polaris.2` for review. These are planned names; no tag object,
+final binaries, signatures or release is produced by this preparation.
+Actual output fields remain null and App admission remains false.
+
+The consumer retains `polaris-desktop-core-v1` receipts and the
+`polaris-desktop-source-v1-` BuildID prefix. The canonical pre-link platform
+facts retain the shared provider receipt and add the measured portable source
+fingerprint and exact `sourceOwnedReplacements`. Every target must link the
+single declared sing-tun replacement; App dependency overlays stay empty.
+The helper `final_platform_identity` gives the exact canonical calculation.
+Binary hashes and signatures are post-link evidence and cannot enter that hash.
+The actual annotated tag object changes the source manifest/provider receipt;
+therefore final platform BuildIDs cannot be guessed during preparation.
+New DNS producer receipts bind actual `repository`, `runId`, and `runAttempt`
+before hashing their facts; consumers compare those fields against the current
+App execution context. Existing D receipts keep their exact historical shape,
+without extra empty arrays, nulls or context fields. `bind_final_receipt_context`
+and `validate_final_receipt_context` specify the producer/consumer calculation;
+they reject technical and old-source receipts and do not grant App admission.
+Once real source/tag inputs are frozen, produce four outputs on one candidate,
+run and attempt using `outputsRequired=false`, then bind their measured hashes
+in the envelope. Do not pre-fill hashes or schedule a second build round.
+
+The offline validator reuses the byte-fixed public a01 source package,
+147 module source ZIPs, the original sing-tun baseline ZIP, three Cronet source
+archives, and all 268 raw notice slices. `dns-source/SOURCE-INDEX.json` binds
+them to aafc and the four immutable original technical receipts.
+`dns-source/SING-TUN-SOURCE-FILES.json` enumerates all 253 baseline files and
+256 modified files with byte hashes; the full kernel archive includes all
+1952 regular tracked product files. Three client submodule refs remain pinned
+without expanding client source trees outside this CLI build.
+
+To validate existing materials without a build or network request:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/polaris_dns_publication.py \
+  --a01-source-package ./polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz \
+  --technical-artifacts ./original-a451-artifacts
+```
+
+Optional `--write-source-inputs ./fresh-dns-source-inputs` writes a small full
+aafc source tar, original baseline ZIP, indexes and validation hashes outside
+the producer checkout. It does not assemble a final distribution package,
+build, download, create tags, sign or publish. Existing outputs are rejected.
+
+After the complete App consumer diff and this contract pass independent review,
+freeze the actual role tag/provider receipt and perform one necessary final
+four-target native validation. Final version/BuildID require newly linked Go
+core bytes. Linux/Windows reuse their fixed prebuilt `.so`/`.dll`; macOS links
+its fixed prebuilt `.a`. No Chromium/Cronet rebuild is required. Inspect actual
+BuildInfo, VCS, replacement, BuildID, byte hashes, native loader behavior and
+Mac signature state/CDHash. Preserve the current signed-arm64 policy and the
+strict thin-Intel unsigned exception; do not guess CDHashes or rewrite old
+receipts. The final source package must adopt the current source index,
+matching build recipes and raw notice superset. Its applicability and original
+Cronet/compiler-runtime link graph limits remain explicit; this preparation
+does not assert legal notice/source completeness or device DNS acceptance.

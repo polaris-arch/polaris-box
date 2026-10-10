@@ -58,6 +58,18 @@
     "mac-x64",
     "mac-arm64"
   ],
-  "nextPlatformRun": "one manual fixed-head four-job native workflow, max-parallel1, after whole-batch parent review",
-  "realDeviceDNSAcceptance": false
+  "nextPlatformRun": "Technical a451 four-target run 38086801501 completed; do not rerun. After whole-batch contract/App review and actual final tag/provider receipt, one necessary final all-current App four-native validation.",
+  "realDeviceDNSAcceptance": false,
+  "technicalEvidence": {
+    "producerHead": "a451c7101466201e0afa1b08065aa1705bf96bef",
+    "run": "38086801501",
+    "attempt": "1",
+    "fourNativeJobsPassed": true,
+    "technicalReceiptSchema": "polaris-dns-technical-native-v1",
+    "AppAdmissible": false
+  },
+  "formalPreparationContract": "release/polaris-dns-publication-contract.json",
+  "formalSourceIndex": "release/dns-source/SOURCE-INDEX.json",
+  "plannedRoleTag": "polaris-v1.15.0-alpha.11-2",
+  "plannedFinalVersion": "1.15.0-alpha.11.polaris.2"
 }
