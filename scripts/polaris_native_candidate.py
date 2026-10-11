@@ -234,15 +234,7 @@ def package(root, destination, os_name):
     return actual
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, required=True)
-    parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--os', choices=['linux', 'windows', 'darwin'], required=True)
-    parser.add_argument('--arch', choices=['amd64', 'arm64'], required=True)
-    options = parser.parse_args()
-    producer = Path(__file__).resolve().parents[1]
-    manifest = json.loads((producer / 'release/polaris-candidate-inputs.json').read_text())
+def build_native(options, producer, manifest):
     source = options.source.resolve()
     output = options.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -328,7 +320,11 @@ def main():
     if 'with_gvisor' not in tags.split(','):
         raise ValueError('gVisor capability absent from actual preset')
     flags = (source / 'release/LDFLAGS').read_text().strip() + ' -s -w -X github.com/sagernet/sing-box/constant.Version=' + manifest['candidateVersion']
+    if manifest.get('buildVCS'):
+        flags += ' -buildid=' + manifest['buildID']
     command = ['go', 'build', '-mod=readonly', '-p', '1', '-trimpath', '-tags', tags, '-ldflags', flags, '-o', str(binary), './cmd/sing-box']
+    if manifest.get('buildVCS'):
+        command.insert(2, '-buildvcs=true')
     run(command, source, env)
     diagnostics_env = dict(env)
     for key in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'DYLD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES'):
@@ -431,6 +427,19 @@ def main():
     receipt['archive'] = {'name': archive.name, 'bytes': archive.stat().st_size, 'sha256': digest(archive),
                           'members': {name: hashlib.sha256(data).hexdigest() for name, data in members.items()}}
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    return receipt
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--os', choices=['linux', 'windows', 'darwin'], required=True)
+    parser.add_argument('--arch', choices=['amd64', 'arm64'], required=True)
+    options = parser.parse_args()
+    producer = Path(__file__).resolve().parents[1]
+    manifest = json.loads((producer / 'release/polaris-candidate-inputs.json').read_text())
+    receipt = build_native(options, producer, manifest)
     print(json.dumps({'archive': receipt['archive']['name'], 'sha256': receipt['archive']['sha256'],
                       'nativeSmokePassed': True, 'publicationEligible': False}))
 
