@@ -82,6 +82,13 @@ env:
   INSTANCE_TESTS: >-
     TestTransientCommandServerPreservesSharedState|TestCommandServerRetainsSharedDiagnostics|TestTransientCommandServerCloseKeepsPrimaryService|TestStrictPrimaryReloadThenFinalCloseIsTerminal|TestStrictPrimaryCloseWaitsForInFlightCommandStartBeforeAcknowledging|TestStrictPrimaryFailedOldCloseBlocksReloadAndRepeatsStickyFailure|TestTransientHTTPInboundRejectsMissingAndWrongSpeedtestCredentials|TestStrictTransientEarlyStartCleanupFailureBecomesSticky|TestUnstartedTUNValidationCannotDeleteOtherInstanceRules
 
+  # These nested tests create real TUNs (including the memory-link fixtures),
+  # modify OS networking, or contain privileged ping cases. Default compilation
+  # still includes every test; execution requires run_instance_tests. TestPing's
+  # unprivileged cases are run separately in the default gate.
+  SING_TUN_INSTANCE_TESTS: >-
+    TestAddDeleteIPAddress|TestAddDeleteRoute|TestFlushDNS|TestGoConnBuffers|TestGoConnKeepalive|TestGoConnLinger|TestGoConnNoDelay|TestGoKernelBidirectionalLoss|TestGoKernelClose|TestGoKernelDeadline|TestGoKernelDeviceBackpressure|TestGoKernelFlowControl|TestGoKernelHalfClose|TestGoKernelHandshake|TestGoKernelHandshakeLoss|TestGoKernelLinkInterruption|TestGoKernelPacket|TestGoKernelPacketBatchIdle|TestGoKernelPacketBuffer|TestGoKernelPacketFragments|TestGoKernelPacketLifetime|TestGoKernelPacketMapping|TestGoKernelPacketOffload|TestGoKernelPacketRead|TestGoKernelPacketTimeout|TestGoKernelPacketWriteAfterClose|TestGoKernelReceiveWindowUpdateLoss|TestGoKernelSACKReneging|TestGoKernelSequenceWrap|TestGoKernelSpliceOwnership|TestGoKernelStream|TestGoKernelTCPLifecycle|TestGoKernelTCPRecovery|TestGoKernelTCPSendBudget|TestGoKernelTCPTransmitLifetime|TestGoKernelTCPWaiting|TestGoKernelWindowClamp|TestGoKernelWindowLimitedRecovery|TestGoKernelZeroWindow|TestGoKernelZeroWindowHalfClose|TestGoListenPrecedence|TestGoListenTCP|TestGoListenUDPPort|TestGoMemoryControlPriority|TestGoMemoryDial|TestGoMemoryMTUUpdate|TestGoMemoryNoHandler|TestGoMemoryOutboundBound|TestGoMemoryOutboundReply|TestGoMemoryPathMTU|TestGoMemoryUDP|TestGoUDPReadBuffer|TestIPChangeMTU|TestIPChangeMetric|TestNetworkUpdateMonitorReceiveOverrun|TestPing|TestSetDNS
+
 jobs:
   linux:
     if: ${{ inputs.source_role != 'mobile' }}
@@ -342,8 +349,13 @@ jobs:
           if [ -n "$nested" ]; then
             grep -qx 'module github.com/sagernet/sing-tun' third_party/sing-tun/go.mod
             tags="$(cat release/DEFAULT_BUILD_TAGS),with_purego"
-            (cd third_party/sing-tun && go test -race -count=1 -tags "$tags" ./...) | tee sing-tun-test.log
+            (cd third_party/sing-tun && go test -race -count=1 \
+              -skip "^($SING_TUN_INSTANCE_TESTS)\$" -tags "$tags" ./...) | tee sing-tun-test.log
             grep -q '^ok' sing-tun-test.log
+            # Retain unprivileged ping coverage without running its raw-socket cases.
+            (cd third_party/sing-tun && go test -race -count=1 -tags "$tags" \
+              -run '^TestPing$/^(ipv4|ipv6)$/^unprivileged$' ./ping) | tee sing-tun-unprivileged-ping.log
+            grep -q '^ok' sing-tun-unprivileged-ping.log
           fi
       - name: Test instances in process
         if: ${{ inputs.run_instance_tests }}
@@ -352,3 +364,12 @@ jobs:
             -tags "$(cat release/DEFAULT_BUILD_TAGS),with_purego" \
             -ldflags "$(cat release/LDFLAGS)" ./experimental/libbox/ ./daemon/ | tee instance.log
           grep -q '^--- PASS' instance.log
+          if [ -f third_party/sing-tun/go.mod ]; then
+            grep -qx 'module github.com/sagernet/sing-tun' third_party/sing-tun/go.mod
+            tags="$(cat release/DEFAULT_BUILD_TAGS),with_purego"
+            # This explicit opt-in supplies neither sudo nor device permissions.
+            # Its real network operations require a separately authorized runner.
+            (cd third_party/sing-tun && go test -race -count=1 -v \
+              -run "^($SING_TUN_INSTANCE_TESTS)\$" -tags "$tags" ./...) | tee sing-tun-instance.log
+            grep -q '^--- PASS' sing-tun-instance.log
+          fi
