@@ -1,0 +1,148 @@
+{
+  "schema": "polaris-production-release-plan-v1",
+  "repository": "polaris-arch/polaris-box",
+  "repositoryId": 1407705262,
+  "version": "1.15.0-alpha.12.polaris.1",
+  "tag": "v1.15.0-alpha.12.polaris.1",
+  "prerelease": true,
+  "sourceBaseCommit": "52b5125407cb67e1fcff342ac27a4226d11676c5",
+  "upstreamTag": "v1.15.0-alpha.12",
+  "upstreamCommit": "25b0d5ea3e466d246c708ac0f20d0448110e566c",
+  "assetPrefix": "polaris-box",
+  "inputPinsPath": "release/polaris-candidate-inputs.json",
+  "inputPinsSha256": "445ec7ddf37748a72d26be3900cd256875a20e94abf4096dcfff609947083447",
+  "noticeIndexSha256": "b9127a5c25821cca2bce26b24a63b7c114902d36421e131b3e1d9568270f8e97",
+  "noticeSha256": "2bb7881f9748328b6d1093025857781b93924ba594e4d7bfc0374429993a8ae2",
+  "reusedSource": {
+    "name": "polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz",
+    "bytes": 271716261,
+    "sha256": "70ff6e51660cc8ea140a30513c42c7b842b4fdb62ba41d863b08405db63ea5ed",
+    "url": "https://github.com/polaris-arch/polaris-box/releases/download/polaris-box-v1.15.0-alpha.11-2/polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz"
+  },
+  "desktop": [
+    {
+      "target": "linux/amd64",
+      "consumerKey": "linux",
+      "suffix": ".tar.gz",
+      "executable": "sing-box",
+      "sidecar": "libcronet.so",
+      "cronetLinkage": "shared-purego"
+    },
+    {
+      "target": "linux/arm64",
+      "consumerKey": null,
+      "suffix": ".tar.gz",
+      "executable": "sing-box",
+      "sidecar": "libcronet.so",
+      "cronetLinkage": "shared-purego"
+    },
+    {
+      "target": "windows/amd64",
+      "consumerKey": "win",
+      "suffix": ".zip",
+      "executable": "sing-box.exe",
+      "sidecar": "libcronet.dll",
+      "cronetLinkage": "shared-purego"
+    },
+    {
+      "target": "windows/arm64",
+      "consumerKey": null,
+      "suffix": ".zip",
+      "executable": "sing-box.exe",
+      "sidecar": "libcronet.dll",
+      "cronetLinkage": "shared-purego"
+    },
+    {
+      "target": "darwin/amd64",
+      "consumerKey": "mac-x64",
+      "suffix": ".tar.gz",
+      "executable": "sing-box",
+      "sidecar": null,
+      "cronetLinkage": "static-cgo"
+    },
+    {
+      "target": "darwin/arm64",
+      "consumerKey": "mac-arm64",
+      "suffix": ".tar.gz",
+      "executable": "sing-box",
+      "sidecar": null,
+      "cronetLinkage": "static-cgo"
+    }
+  ],
+  "mobile": {
+    "state": "contract-only-pending-App-owner-and-native-builds",
+    "android": {
+      "format": "AAR",
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a",
+        "x86",
+        "x86_64"
+      ],
+      "go": "1.25.5",
+      "gomobile": "v0.1.13",
+      "ndk": "30.0.16138531-beta3",
+      "minimumAPI": 24,
+      "minimumLoadAlignment": 16384
+    },
+    "ios": {
+      "format": "static-XCFramework.zip",
+      "slices": [
+        "ios-arm64",
+        "ios-arm64-simulator",
+        "ios-x86_64-simulator"
+      ],
+      "go": "1.25.5",
+      "gomobile": "v0.1.12",
+      "xcode": "27.0",
+      "minimumOS": "15.0",
+      "consumption": "App build-time download, verification and static link; never install-time static-library loading"
+    }
+  },
+  "matrixGaps": {
+    "upstreamCLIArchives": 44,
+    "implementedDesktopArchives": 6,
+    "otherCLIArchives": "38 not supported by this producer",
+    "linuxPackages": "31 not produced",
+    "openWrtPackages": "64 not produced",
+    "upstreamClients": "29 SFA/SFI/SFL/SFM/SFW assets belong to upstream clients; Polaris App packaging is owned separately"
+  },
+  "consumerContract": {
+    "state": "pending-App-owner-signoff",
+    "archiveRoot": "polaris-box-<version>-<os>-<arch>",
+    "requiredIdentity": [
+      "repository",
+      "tagObject",
+      "sourceCommit",
+      "sourceTree",
+      "version",
+      "archiveSha256",
+      "archiveBytes",
+      "memberSha256",
+      "sourceFingerprint",
+      "buildID",
+      "goos",
+      "goarch",
+      "cgo",
+      "tags",
+      "cronetVersion",
+      "cronetLinkage",
+      "signatureObservation"
+    ],
+    "verification": "Expected hashes come from reviewed frozen manifest, never from the downloaded bytes themselves",
+    "sourceFallback": "forbidden",
+    "acceptance": "actual release download, verification, safe unpack, identity checks, library loading, core/Cronet execution and final Polaris carrier proof"
+  },
+  "publication": {
+    "state": "blocked-until-independent-source-review-native-builds-license-source-review-and-consumer-signoff",
+    "publicUploadPerformed": false,
+    "deviceAcceptance": false,
+    "moveUsedTags": false,
+    "deleteHistoricalAssets": false
+  },
+  "testingSynchronization": {
+    "state": "blocked-non-fast-forward; no rewrite authorized in this batch",
+    "forkCommit": "1384c4cfb20198d4a5483dff658f9dd08ce155ba",
+    "upstreamTestingCommit": "e4b7e692f4545890bfc9d43960328e1449fa803b"
+  }
+}
