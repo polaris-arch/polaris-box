@@ -38,6 +38,38 @@ class ProductionTests(unittest.TestCase):
             'replacementFilesVerified': 256,
             'isolatedGoSettings': {'GOENV': 'off', 'GOWORK': 'off', 'GOFLAGS': '', 'GOTOOLCHAIN': 'local'}}
 
+    def test_windows_replacement_failure_stops_before_core_build_and_preserves_log(self):
+        class BuilderReached(Exception):
+            pass
+        for failure in (True, False):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / 'source'
+                (source / '.git').mkdir(parents=True)
+                (source / 'release').mkdir()
+                for name in ('DEFAULT_BUILD_TAGS_WINDOWS', 'LDFLAGS'):
+                    shutil.copy2(REPO / 'release' / name, source / 'release' / name)
+                output = Path(directory) / 'output'
+                result = RuntimeError('actual vet failure') if failure else 'seven Windows tests passed'
+                with patch.dict(production.os.environ, dict(os.environ), clear=True), \
+                     patch.object(production, 'frozen_source', return_value=(self.config, 'c' * 40)), \
+                     patch.object(production, 'verify_source'), \
+                     patch.object(production, 'collect', return_value=self.fingerprint()), \
+                     patch.object(production.shutil, 'which', return_value='/private/go'), \
+                     patch.object(production, 'run', side_effect=result if failure else None,
+                                  return_value=None if failure else result) as execute, \
+                     patch.object(production, 'build_native', side_effect=BuilderReached) as builder:
+                    expected = RuntimeError if failure else BuilderReached
+                    with self.assertRaises(expected):
+                        production.native(REPO, source, HEAD, 'windows/amd64', output)
+                    self.assertEqual(builder.call_count, 0 if failure else 1)
+                    command, cwd, environment = execute.call_args.args
+                    self.assertEqual(command[-1], './...')
+                    self.assertNotIn('-vet=off', command)
+                    self.assertEqual(cwd, source / 'third_party/sing-tun')
+                    self.assertEqual(environment['GOOS'], 'windows')
+                    self.assertEqual(environment['CGO_ENABLED'], '0')
+                    self.assertIn(str(result), (output / 'windows-replacement-regressions.log').read_text())
+
     def test_build_identity_is_portable_and_binds_source_version_tag_and_features(self):
         fp = self.fingerprint()
         tags = 'with_gvisor,with_quic'

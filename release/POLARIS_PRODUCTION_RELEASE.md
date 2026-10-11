@@ -38,6 +38,19 @@ The other 38 upstream CLI archives, 31 Linux packages and 64 OpenWrt packages
 are not produced by this workflow. SFA/SFI/SFL/SFM/SFW are upstream clients;
 their 29 assets cannot be relabeled as Polaris App packages.
 
+## Windows replacement preflight
+
+Before building the Windows core, the producer compiles/vets every package in
+its frozen sing-tun replacement and runs the seven Windows DNS/lifecycle tests
+with Go test's default vet enabled. A failed preflight stops the core build and
+preserves its log. The inherited winipcfg tests used unsupported `%w` formatting
+in 51 testing.Errorf calls; the separate `sing-tun-test-printf.patch` changes
+only those output directives to `%v`. The source binding records both modified
+baseline files and the 251 remaining byte-exact baseline files. The original
+Windows auto-route patch and all production replacement code remain unchanged.
+The new replacement tree requires new source/platform identities; historical
+DNS/a01/mobile receipts retain their original inputs and meaning.
+
 ## Consumer verification
 
 The App owner maintains the consumer manifest/download adapter separately from

@@ -11,7 +11,7 @@ from polaris_go_environment import isolated_go_environment
 MODULE = 'github.com/sagernet/sing-tun'
 VERSION = 'v0.9.7-0.20261009022811-5c2edb183cc9'
 REPLACEMENT = './third_party/sing-tun'
-EXPECTED_REPLACEMENT_TREE = '18492017863a3bf41df92fe528c2bbe38fe97ab2'
+EXPECTED_REPLACEMENT_TREE = 'f3d3ebdbe6d7180d52388a5f3ba2214db4cffd6b'
 
 
 def git(repo, *args):

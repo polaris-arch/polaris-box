@@ -31,7 +31,11 @@ CHANGES = {CONFIG, 'release/POLARIS_PRODUCTION_RELEASE.md',
            '.github/workflows/polaris-production-release.yml',
            'scripts/polaris_native_candidate.py', 'scripts/polaris_production_release.py',
            'scripts/test_polaris_production_release.py',
-           'scripts/polaris_production_publish.py', 'scripts/test_polaris_production_publish.py'}
+           'scripts/polaris_production_publish.py', 'scripts/test_polaris_production_publish.py',
+           'third_party/sing-tun/internal/winipcfg/winipcfg_test.go',
+           'release/dependency-sources/sing-tun-test-printf.patch',
+           'release/dependency-sources/sing-tun-replacement.json',
+           'scripts/polaris_source_fingerprint.py'}
 
 
 def require(condition, message):
@@ -356,6 +360,19 @@ def native(repo, source, expected, key, output):
     if os_name == 'linux':
         build_tags += ',with_purego'
     build_id = build_identity(fp, key, config['version'], build_tags, config['tag'])
+    if os_name == 'windows':
+        # Compile/vet the entire replacement and run its seven platform tests
+        # before the expensive core build. Keep Go test's default vet enabled.
+        log = output / 'windows-replacement-regressions.log'
+        try:
+            log.write_text(run([go, 'test', '-mod=readonly', '-p', '1', '-parallel', '2',
+                '-count=1', '-v', '-tags', build_tags, '-ldflags',
+                (source / 'release/LDFLAGS').read_text().strip(),
+                '-run', '^TestWindows(DNS|Lifecycle)', './...'],
+                source / 'third_party/sing-tun', dict(os.environ)))
+        except RuntimeError as error:
+            log.write_text(str(error) + '\n')
+            raise
     manifest = copy.deepcopy(json.loads((repo / config['inputPinsPath']).read_bytes()))
     manifest.update(sourceCommit=expected, sourceTree=tree, candidateVersion=config['version'],
                     upstreamBaselineCommit=config['upstreamCommit'], upstreamBaselineTag=config['upstreamTag'],
@@ -378,11 +395,6 @@ def native(repo, source, expected, key, output):
                       '-tags', tags, '-ldflags', (source / 'release/LDFLAGS').read_text().strip(),
                       './common/dialer', './dns', './option', './dns/transport/local/systemconfig'], source, regression_env)
     (output / 'dns-regressions.log').write_text(regression)
-    if os_name == 'windows':
-        (output / 'windows-replacement-regressions.log').write_text(run([go, 'test', '-mod=readonly',
-            '-p', '1', '-parallel', '2', '-count=1', '-v', '-tags', tags, '-ldflags',
-            (source / 'release/LDFLAGS').read_text().strip(), '-run', '^TestWindows(DNS|Lifecycle)', './...'],
-            source / 'third_party/sing-tun', regression_env))
     receipt['archivePath'] = str(technical / receipt['archive']['name'])
     final_output = output / 'final'
     final_output.mkdir()
