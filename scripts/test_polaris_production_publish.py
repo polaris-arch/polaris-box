@@ -80,6 +80,57 @@ class ProductionPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'local asset differs'):
                 publish.validate_manifest(manifest, publish.sha(manifest.read_bytes()), HEAD)
 
+    def test_same_length_archive_replacement_after_initial_check_is_rejected_before_manifest(self):
+        # Exercise both native and corresponding-source inputs. A self-consistent
+        # newly hashed output must never replace the reviewer-approved bytes.
+        for replace_source in (False, True):
+            with self.subTest(source=replace_source), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory);config, inputs, index_sha, approvals = self.inputs(base)
+                initial = json.loads((inputs / 'polaris-box-assets.json').read_bytes())
+                record = initial['sourceAsset'] if replace_source else initial['platforms'][0]['archive']
+                changed = inputs / record['name'];original_copy = publish.shutil.copyfile
+                mutated = False
+                def copy_after_checked(src, dst):
+                    nonlocal mutated
+                    if Path(src) == changed:
+                        data = changed.read_bytes()
+                        changed.write_bytes(bytes([data[0] ^ 1]) + data[1:])
+                        self.assertEqual(changed.stat().st_size, record['bytes'])
+                        self.assertNotEqual(publish.file_info(changed)['sha256'], record['sha256'])
+                        mutated = True
+                    return original_copy(src, dst)
+                with patch.object(publish, 'frozen_source', return_value=(config, TREE)), \
+                     patch.object(publish.shutil, 'copyfile', side_effect=copy_after_checked), \
+                     patch.object(publish, 'api', side_effect=AssertionError('local preparation only')), \
+                     patch.object(publish, 'command', side_effect=AssertionError('no remote/tag writes')), \
+                     self.assertRaisesRegex(ValueError, 'copied archive differs from reviewed input'):
+                    publish.prepare(REPO, HEAD, inputs, index_sha, approvals, publish.sha(approvals.read_bytes()),
+                                    base / 'out', '1791720000', 'Fixture', 'fixture@example.invalid')
+                self.assertTrue(mutated)
+                self.assertFalse((base / 'out' / 'publication-manifest.json').exists())
+                self.assertFalse((base / 'out' / 'polaris-box-assets.json').exists())
+                self.assertFalse((base / 'out' / 'SHA256SUMS').exists())
+
+    def test_manifest_hash_and_parser_use_one_snapshot_despite_read_window_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, reviewed = self.prepare(Path(directory))
+            frozen_raw = manifest.read_bytes();raw_read = Path.read_bytes;reads = []
+            unreviewed = copy.deepcopy(reviewed);unreviewed['title'] = 'unapproved replacement title'
+            def replace_after_read(path):
+                raw = raw_read(path)
+                if path == manifest:
+                    reads.append(raw)
+                    manifest.write_bytes(publish.encode(unreviewed))
+                return raw
+            with patch.object(Path, 'read_bytes', replace_after_read):
+                actual = publish.validate_manifest(manifest, publish.sha(frozen_raw), HEAD)
+            self.assertEqual(reads, [frozen_raw])
+            self.assertEqual(actual, reviewed)
+            self.assertNotEqual(actual['title'], unreviewed['title'])
+            # The now-replaced file is rejected on the next independently invoked check.
+            with self.assertRaisesRegex(ValueError, 'manifest hash'):
+                publish.validate_manifest(manifest, publish.sha(frozen_raw), HEAD)
+
     def test_missing_review_wrong_scope_or_new_index_blocks_before_any_output(self):
         for mutation in [lambda a: a.update(sourceCommit='c' * 40), lambda a: a.update(scope='mobile'),
                          lambda a: a.update(nativeIndexSha256='0' * 64),

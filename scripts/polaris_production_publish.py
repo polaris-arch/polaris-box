@@ -89,6 +89,8 @@ def prepare(repo, expected, inputs, index_sha, approvals, approvals_sha, output,
     output.mkdir(parents=True)
     for n in sorted(expected_archives):
         shutil.copyfile(inputs / n, output / n)
+        require(file_info(output / n) == {k: expected_archives[n][k] for k in ('name', 'bytes', 'sha256')},
+                'copied archive differs from reviewed input: ' + n)
     index['tagObject'] = object_sha
     index['tagObjectState'] = 'prepared-expectation; remote tag creation and verification pending'
     index['publicationEligible'] = True
@@ -115,8 +117,9 @@ def prepare(repo, expected, inputs, index_sha, approvals, approvals_sha, output,
 
 
 def validate_manifest(path, expected_hash, expected_head):
-    require(sha(path.read_bytes()) == expected_hash, 'frozen publication manifest hash differs')
-    m = json.loads(path.read_bytes())
+    raw = path.read_bytes()
+    require(sha(raw) == expected_hash, 'frozen publication manifest hash differs')
+    m = json.loads(raw)
     require(m['schema'] == 'polaris-production-publication-v1' and m['repository'] == REPOSITORY
             and m['repositoryId'] == REPOSITORY_ID and m['sourceCommit'] == expected_head
             and m['tag'] == 'v' + m['version'], 'publication identity differs')
