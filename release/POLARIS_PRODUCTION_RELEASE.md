@@ -87,8 +87,9 @@ until their historical replay/migration contract is separately closed.
 
 ## Mobile delivery
 
-The mobile contract is pending App-owner API/signature and source-migration
-review. Android requires a real AAR with all four ABIs, actual JNI methods,
+App owner has provided four-desktop layout feedback; formal identity and actual
+release-consumption signoff remain pending. Mobile is a separate batch pending
+App-owner API/signature and source-migration review. Android requires a real AAR with all four ABIs, actual JNI methods,
 API24 minimum, 16KiB load alignment and the approved NDK/gomobile versions.
 iOS requires a static XCFramework containing device arm64 and both simulator
 slices. The App packaging pipeline downloads/verifies and statically links it,
@@ -113,3 +114,98 @@ Keep the a01 source asset while old DNS acquisition/replay instructions refer
 to it. Only after the new real-release consumer chain succeeds and all old
 dependencies are addressed may a precise obsolete-asset subset be reviewed for
 cleanup. Restorable bytes do not preserve deleted GitHub release IDs or counters.
+
+## Portable identity and App mapping
+
+The original `sourceFingerprint` collector object (`fork-source-fingerprint-v1`)
+retains its meaning and host observations. A separately versioned
+`portableSourceIdentity` selects exactly sourceCommit, sourceTree, sourceOverlay,
+goVersion, goModSha256, goSumSha256 and replacement. Its `fingerprint` is SHA256
+of sorted-key, compact ASCII JSON, using the existing DNS contract canonicalizer.
+`sourceIdentityFingerprint` is that same digest. Host module-list paths/digests,
+Go executable hashes and evidence paths never enter the shared source identity.
+
+`portablePlatformIdentity` hashes sourceIdentityFingerprint, os/arch, CGO_ENABLED,
+sorted exact tags, version, canonical tag, Go version and sourceOverlay with the
+same canonicalizer. `platformInputFingerprint` is its digest; the actual measured
+BuildID must equal `polaris-production-v1-<platformInputFingerprint>`. Changed
+source/version/tag/features change it; relocation or cache/tool observation
+changes do not. This new schema is not the old App source-build receipt schema.
+
+`providerContract=polaris-box-release-v1` and `providerIdentity` hash the actual
+sourceCommit and source-owned producer/input file SHA256 map. Its digest is
+`providerFingerprint`; this is a new actual producer identity. The App owner must
+review the separate release adapter/provider-code identity and field mapping;
+neither old provider `4449...` nor old source-build fingerprints are reused.
+Raw BuildInfo/module graph/Go/tags/CGO/replacement facts, native library identities
+and actual BuildID remain in each receipt for consumer verification.
+
+## Explicit production publication exits
+
+`scripts/polaris_production_publish.py` is never invoked by native CI. Its local
+`prepare` mode requires the exact produced index digest and a separately reviewed
+`polaris-production-approvals-v1` document binding source/version/index/scope
+`six-desktop-CLI`. Source review, license/source applicability and App-owner
+contract approval each need approved status, reviewer and evidence. The script
+does not manufacture approvals. It snapshots exact archive bytes, updates the
+outer index with a prepared annotated-tag expectation, rehashes checksums and
+creates a private nine-asset publication manifest. No tag/ref/remote is created.
+
+After the new concrete version/bytes/manifest are authorized, `stage-draft`
+creates only the new exact annotated tag and fork draft, then uploads frozen
+snapshots without clobber. `resume-tagged` handles an inspected exact tag with no
+release; `resume-draft` requires its exact release ID and permits only missing
+assets when every existing name/size/digest matches. Unexpected tags/assets stop
+and are preserved. `publish` requires the exact inspected full draft ID, tag
+object, source head and frozen manifest digest. It publishes a prerelease and
+anonymously hashes all nine public assets. `readback` repeats the read-only
+public proof. Producer readback does not sign App/mobile/device acceptance.
+
+The nine desktop assets do not include an AAR, XCFramework, installer or final
+Polaris App. Mobile four-ABI/three-slice artifacts, exact JNI and ObjC/Swift APIs,
+16KiB load/final-APK checks, final PacketTunnel link/signatures and device DNS/TUN
+behavior remain unverified separate delivery gates. Current App aafc/718 role
+tag/provider/source manifests are unchanged. Keep the old a01 source asset until
+all historical replay and new-consumer dependencies have been migrated.
+
+
+Only after independent review and the one approved six-native assembly run,
+prepare an externally reviewed approvals document and run the local freeze:
+
+```sh
+python3 -B scripts/polaris_production_publish.py prepare \
+  --expected-head <approved-final-source-SHA> --inputs <actual-assembly-directory> \
+  --index-sha256 <reviewed-actual-native-index-SHA256> \
+  --approvals <reviewed-approvals.json> --approvals-sha256 <reviewed-approvals-SHA256> \
+  --tag-epoch <explicit-UTC-epoch> --tagger-name <actual-tagger-name> \
+  --tagger-email <actual-tagger-email> --output <fresh-external-prepared-directory>
+```
+
+Review the new prepared index/checksums/tag expectation and private manifest.
+All following actions require its frozen manifest SHA256 and the same source
+checkout. `stage-draft` creates the new tag/draft; it does not publish:
+
+```sh
+python3 -B scripts/polaris_production_publish.py stage-draft \
+  --expected-head <approved-final-source-SHA> \
+  --manifest <prepared-directory>/publication-manifest.json \
+  --manifest-sha256 <reviewed-prepared-manifest-SHA256> \
+  --output <fresh-external-draft-receipt.json>
+```
+
+After inspecting the resulting exact release ID and all nine draft assets,
+use the same command with `publish --release-id <inspected-ID>` and a fresh
+receipt path. For partial staging, use `resume-tagged` only after inspecting an
+exact remote tag with no release, or `resume-draft --release-id <inspected-ID>`.
+No command removes a preexisting tag/release/asset. A failed push may leave the
+new local tag; inspect local and remote identity before any manual recovery.
+
+The public readback receipt records real releaseId/assetId/URL and anonymous
+size/hash checks for every uploaded asset. Its `consumerContract` selects the
+four App keys and preserves each actual native receipt's provider, portable
+source/platform identity, exact build inputs and archive/core/sidecar facts.
+The release index digest is the actual published index digest, distinct from
+its reviewed native candidate predecessor. A public release observed before a
+failed download is recorded as `public-awaiting-anonymous-readback`; retry
+`readback` with a fresh receipt path. A successful producer receipt still leaves
+actual App download/load/carrier, mobile and device acceptance pending.

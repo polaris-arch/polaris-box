@@ -6,6 +6,8 @@ on:
         description: Generate provenance after approved main integration; does not publish a release
         type: boolean
         default: false
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
 permissions:
   contents: read
 concurrency:
@@ -27,8 +29,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 producer/scripts/polaris_production_release.py plan > "$RUNNER_TEMP/polaris-plan.json"
-          python3 - <<'PY'
+          python3 -B producer/scripts/polaris_production_release.py plan > "$RUNNER_TEMP/polaris-plan.json"
+          python3 -B - <<'PY'
           import json, os
           from pathlib import Path
           plan = json.loads((Path(os.environ['RUNNER_TEMP']) / 'polaris-plan.json').read_bytes())
@@ -85,7 +87,7 @@ jobs:
           GOCACHE: ${{ runner.temp }}/polaris-production-gocache
         run: |
           set -euo pipefail
-          python producer/scripts/polaris_production_release.py native \
+          python -B producer/scripts/polaris_production_release.py native \
             --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
             --target "$PRODUCTION_TARGET" --output "$RUNNER_TEMP/polaris-production"
       - name: Preserve actual output and failures
@@ -118,9 +120,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 producer/scripts/polaris_production_release.py fetch-source \
+          python3 -B producer/scripts/polaris_production_release.py fetch-source \
             --output "$RUNNER_TEMP/polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz"
-          python3 producer/scripts/polaris_production_release.py assemble \
+          python3 -B producer/scripts/polaris_production_release.py assemble \
             --expected-head "$GITHUB_SHA" --inputs "$RUNNER_TEMP/native-inputs" \
             --reused-source "$RUNNER_TEMP/polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz" \
             --output "$RUNNER_TEMP/polaris-production-final"

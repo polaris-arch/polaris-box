@@ -70,7 +70,7 @@
     }
   ],
   "mobile": {
-    "state": "contract-only-pending-App-owner-and-native-builds",
+    "state": "separate-batch; no-mobile-assets-in-desktop-producer-or-publisher",
     "android": {
       "format": "AAR",
       "abis": [
@@ -97,7 +97,15 @@
       "xcode": "27.0",
       "minimumOS": "15.0",
       "consumption": "App build-time download, verification and static link; never install-time static-library loading"
-    }
+    },
+    "unverifiedGates": [
+      "new-source API/owner migration signoff",
+      "Android actual four ABI AAR/JNI signatures and runtime linkage",
+      "Android actual minimumAPI and 16KiB PT_LOAD/ZIP/final APK acceptance",
+      "iOS actual three static XCFramework slices and generated Objective-C/Swift API",
+      "iOS actual final App/PacketTunnel link and signature provenance",
+      "actual mobile carrier/device DNS/TUN/network lifecycle checks"
+    ]
   },
   "matrixGaps": {
     "upstreamCLIArchives": 44,
@@ -108,7 +116,7 @@
     "upstreamClients": "29 SFA/SFI/SFL/SFM/SFW assets belong to upstream clients; Polaris App packaging is owned separately"
   },
   "consumerContract": {
-    "state": "pending-App-owner-signoff",
+    "state": "layout-feedback-received-from-App-owner; formal-identity-and-real-release-consumption-signoff-pending",
     "archiveRoot": "polaris-box-<version>-<os>-<arch>",
     "requiredIdentity": [
       "repository",
@@ -127,11 +135,30 @@
       "tags",
       "cronetVersion",
       "cronetLinkage",
-      "signatureObservation"
+      "signatureObservation",
+      "providerContract",
+      "providerFingerprint",
+      "providerIdentity",
+      "sourceIdentityFingerprint",
+      "portableSourceIdentity",
+      "platformInputFingerprint",
+      "portablePlatformIdentity",
+      "buildGraph",
+      "workflowRun",
+      "workflowAttempt"
     ],
     "verification": "Expected hashes come from reviewed frozen manifest, never from the downloaded bytes themselves",
     "sourceFallback": "forbidden",
-    "acceptance": "actual release download, verification, safe unpack, identity checks, library loading, core/Cronet execution and final Polaris carrier proof"
+    "acceptance": "actual release download, verification, safe unpack, identity checks, library loading, core/Cronet execution and final Polaris carrier proof",
+    "providerContract": "polaris-box-release-v1",
+    "identityMapping": {
+      "sourceFingerprint": "original fork-source-fingerprint-v1 collector object retained with host observations; not the old App source receipt fingerprint",
+      "sourceIdentityFingerprint": "portableSourceIdentity.fingerprint; canonical stable seven-field source facts as existing DNS contract",
+      "platformInputFingerprint": "portablePlatformIdentity.fingerprint; canonical stable source fingerprint, os/arch/CGO/tags/version/tag/Go/overlay facts",
+      "buildID": "polaris-production-v1-<platformInputFingerprint>; verified against actual binary",
+      "providerFingerprint": "providerIdentity.fingerprint over canonical providerContract/sourceCommit/fileSha256; new producer values, not old 4449 App provider",
+      "AppProvider": "App release adapter code/manifest fingerprint remains separately owned; formal mapping requires owner review"
+    }
   },
   "publication": {
     "state": "blocked-until-independent-source-review-native-builds-license-source-review-and-consumer-signoff",
@@ -144,5 +171,13 @@
     "state": "blocked-non-fast-forward; no rewrite authorized in this batch",
     "forkCommit": "1384c4cfb20198d4a5483dff658f9dd08ce155ba",
     "upstreamTestingCommit": "e4b7e692f4545890bfc9d43960328e1449fa803b"
+  },
+  "deliveryExits": {
+    "native": "manual six-native candidates + same-run assembly; no release mutation",
+    "prepare": "local exact nine-assets preparation from real native index plus independently hashed source/license/App-contract approvals; computes expected annotated tag object, creates no tag/ref",
+    "stage": "explicit new annotated tag + draft + immutable missing-only uploads; fork only; never overwrite existing tag/assets",
+    "publish": "explicit inspected full draft ID/tag object/manifest digest; public prerelease then anonymous nine-asset hash readback",
+    "App": "separate owner release download-to-final-carrier acceptance; not implemented by fork publisher",
+    "mobile": "separate batch; required artifacts/API/JNI/16KiB/PacketTunnel/signature/device gates not completed"
   }
 }

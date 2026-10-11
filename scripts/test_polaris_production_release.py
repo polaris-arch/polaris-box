@@ -1,6 +1,11 @@
-import copy
 import io
 import json
+import copy
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 import struct
 import tarfile
@@ -21,6 +26,71 @@ class ProductionTests(unittest.TestCase):
     def setUp(self):
         self.config = production.plan(REPO)
 
+    def fingerprint(self):
+        binding_path = REPO / 'release/dependency-sources/sing-tun-replacement.json'
+        return {'schema': 'fork-source-fingerprint-v1', 'sourceCommit': HEAD,
+            'sourceTree': 'c' * 40, 'sourceOverlay': 0, 'goVersion': 'go1.25.5',
+            'goModSha256': production.sha((REPO / 'go.mod').read_bytes()),
+            'goSumSha256': production.sha((REPO / 'go.sum').read_bytes()),
+            'replacement': {**json.loads(binding_path.read_bytes()),
+                            'bindingSha256': production.sha(binding_path.read_bytes())},
+            'moduleListSha256': 'host-observation', 'goExecutableSha256': 'host-tool-observation',
+            'replacementFilesVerified': 256,
+            'isolatedGoSettings': {'GOENV': 'off', 'GOWORK': 'off', 'GOFLAGS': '', 'GOTOOLCHAIN': 'local'}}
+
+    def test_build_identity_is_portable_and_binds_source_version_tag_and_features(self):
+        fp = self.fingerprint()
+        tags = 'with_gvisor,with_quic'
+        def identity(value=fp, version=self.config['version'], tag=self.config['tag'], flags=tags):
+            return production.build_identity(value, 'linux/amd64', version, flags, tag)
+        expected = identity()
+        for directory in ['/tmp/checkout-a/mod-cache-a', 'C:/checkout-b/mod-cache-b']:
+            observed = dict(fp, moduleListSha256=production.sha(directory.encode()),
+                            goExecutableSha256=directory, scope=directory)
+            self.assertEqual(identity(observed), expected)
+            self.assertEqual(production.portable_source_identity(observed), production.portable_source_identity(fp))
+        self.assertEqual(identity(flags='with_quic,with_gvisor'), expected)
+        for key in ['sourceCommit', 'sourceTree', 'goModSha256', 'goSumSha256']:
+            self.assertNotEqual(identity(dict(fp, **{key: 'changed'})), expected)
+        changed = copy.deepcopy(fp)
+        changed['replacement']['replacementTree'] = 'e' * 40
+        self.assertNotEqual(identity(changed), expected)
+        self.assertNotEqual(identity(version='other'), expected)
+        self.assertNotEqual(identity(tag='vother'), expected)
+        self.assertNotEqual(identity(flags='with_gvisor'), expected)
+        facts = production.portable_source_identity(fp)['facts']
+        self.assertEqual(set(facts), {'sourceCommit', 'sourceTree', 'sourceOverlay', 'goVersion',
+                                     'goModSha256', 'goSumSha256', 'replacement'})
+        self.assertEqual(production.portable_source_identity(fp)['fingerprint'],
+                         production.sha(production.canonical(facts).encode()))
+
+    def test_actual_clean_standalone_entry_without_bytecode_host_override(self):
+        with tempfile.TemporaryDirectory(prefix='polaris-entry-proof-') as directory:
+            source = Path(directory) / 'source'
+            subprocess.run(['git', 'clone', '--local', '--no-hardlinks', str(REPO), str(source)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            for name in production.CHANGES:
+                original = REPO / name
+                if original.exists():
+                    destination = source / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(original, destination)
+            subprocess.run(['git', 'add', '--', *sorted(production.CHANGES)], cwd=source, check=True)
+            subprocess.run(['git', '-c', 'user.name=Polaris entry test', '-c', 'user.email=entry-test@example.invalid',
+                            'commit', '--allow-empty', '-m', 'Freeze temporary entry proof'], cwd=source,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
+            environment = dict(os.environ)
+            environment.pop('PYTHONDONTWRITEBYTECODE', None)
+            for mode in ['plan', 'verify-source']:
+                # Neither -B nor a pre-set bytecode environment protects this invocation.
+                result = subprocess.run([sys.executable, 'scripts/polaris_production_release.py', mode,
+                    '--expected-head', head], cwd=source, env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(list(source.rglob('__pycache__')))
+            self.assertEqual(subprocess.check_output(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
+                                                     cwd=source), b'')
+
     def fixture(self, base, key='linux/amd64'):
         row = production.target(self.config, key)
         root = base / production.basename(self.config, key)
@@ -30,6 +100,8 @@ class ProductionTests(unittest.TestCase):
         core.chmod(0o755)
         if row['sidecar']:
             (root / row['sidecar']).write_bytes(b'inert-library-fixture')
+        (root / 'licenses').mkdir()
+        (root / 'licenses/NOTICE').write_bytes((REPO / 'release/licenses/NOTICE').read_bytes())
         (root / 'provenance.json').write_bytes(b'{}')
         (root / 'SHA256SUMS').write_bytes(b'old checksum')
         archive = base / (root.name + row['suffix'])
@@ -49,7 +121,7 @@ class ProductionTests(unittest.TestCase):
                    'coreNative': {'format': 'inert-fixture', 'signatureTrustValidated': False},
                    'cronetNative': {'format': 'inert-fixture', 'signatureTrustValidated': False},
                    'cronet': {'sha256': production.sha(b'inert-library-fixture')}}
-        fp = {'sourceCommit': HEAD, 'sourceTree': 'c' * 40}
+        fp = self.fingerprint()
         graph = {'normalModules': [{k: module[k] for k in ('module', 'version', 'h1')}], 'settings': {'-tags': tags},
                  'prebuiltAcquisitionModules': []}
         return receipt, fp, graph
@@ -72,6 +144,12 @@ class ProductionTests(unittest.TestCase):
                 root = production.basename(self.config, row['target'])
                 self.assertEqual(members[root + '/LICENSE'][0], (REPO / 'LICENSE').read_bytes())
                 self.assertEqual(members[root + '/' + row['executable']], (b'inert-core-fixture', 0o755))
+                notice = members[root + '/NOTICE'][0]
+                self.assertEqual(notice, members[root + '/licenses/NOTICE'][0])
+                self.assertIn(HEAD.encode(), notice)
+                self.assertIn(self.config['version'].encode(), notice)
+                self.assertNotIn(b'/tree/a01da7a942b3a0dbbfdfda2bba5bd63d5bd9d932', notice)
+                self.assertEqual(final['noticeIdentity']['sha256'], production.sha(notice))
                 self.assertFalse(final['publicationEligible'])
                 self.assertFalse(final['publicUploadPerformed'])
                 self.assertEqual(final['archive']['name'], root + row['suffix'])
@@ -214,9 +292,10 @@ class ProductionTests(unittest.TestCase):
                 key = spec['target']
                 platform = inputs / key.replace('/', '-')
                 platform.mkdir()
-                receipt, fp, graph = self.fixture(platform, key)
-                fp['replacement'] = {'replacementTree': 'd' * 40}
-                root = platform / production.basename(self.config, key)
+                technical = platform / 'technical'
+                technical.mkdir()
+                receipt, fp, graph = self.fixture(technical, key)
+                root = technical / production.basename(self.config, key)
                 core = root / spec['executable']
                 data = bytearray(128)
                 os_name, arch = key.split('/')
@@ -242,7 +321,7 @@ class ProductionTests(unittest.TestCase):
                                       'members': {n: production.sha(d) for n, d in members.items()}}
                 receipt['payloadHashes'][spec['executable']] = production.sha(data)
                 receipt.update(workflowCommit=HEAD, workflowRun='20', workflowAttempt='1')
-                bid = production.build_identity(fp, key, self.config['version'])
+                bid = production.build_identity(fp, key, self.config['version'], receipt['tags'], self.config['tag'])
                 ids[key] = bid
                 info = self.actual_info(key).replace('h1:AAAA=', graph['normalModules'][0]['h1']).replace(BUILD_ID, bid)
                 graph = production.build_info(info, HEAD, bid, key)
@@ -255,8 +334,9 @@ class ProductionTests(unittest.TestCase):
                 if spec['sidecar']:
                     final['nativeCronetSmoke']['library'] = '/fixture/' + spec['sidecar']
                     final['finalPackageCronetSmoke'] = dict(final['nativeCronetSmoke'])
-                # Keep only the actual final archive in the aggregate input set.
-                Path(receipt['archivePath']).unlink()
+                # Keep the full real native upload layout including the same-name
+                # technical archive; assembly must select the controlled final path.
+                self.assertTrue(Path(receipt['archivePath']).exists())
                 (out / 'production-receipt.json').write_bytes(encode(final))
             module = final['buildGraph']['normalModules'][0]
             zip_bytes = b'inert-verified-module-source'

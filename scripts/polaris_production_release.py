@@ -11,6 +11,9 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
+# Entry-point imports must not dirty the source being measured.
+sys.dont_write_bytecode = True
 import tarfile
 from types import SimpleNamespace
 import urllib.request
@@ -20,13 +23,15 @@ from polaris_native_candidate import build_native, digest, run
 from polaris_native_distribution import read_archive, write_archive, file_info, encode, check_bytes
 from polaris_native_matrix import TARGETS
 from polaris_source_fingerprint import collect, MODULE, VERSION, REPLACEMENT
+from polaris_dns_identity import canonical
 
 CONFIG = 'release/polaris-production-release.json'
 UPSTREAM_DELTA = {'.github/workflows/build.yml', 'docs/changelog.md'}
 CHANGES = {CONFIG, 'release/POLARIS_PRODUCTION_RELEASE.md',
            '.github/workflows/polaris-production-release.yml',
            'scripts/polaris_native_candidate.py', 'scripts/polaris_production_release.py',
-           'scripts/test_polaris_production_release.py'}
+           'scripts/test_polaris_production_release.py',
+           'scripts/polaris_production_publish.py', 'scripts/test_polaris_production_publish.py'}
 
 
 def require(condition, message):
@@ -89,8 +94,68 @@ def basename(config, key):
     return 'polaris-box-' + config['version'] + '-' + key.replace('/', '-')
 
 
-def build_identity(fingerprint, key, version):
-    return 'polaris.' + sha(encode({'sourceFingerprint': fingerprint, 'target': key, 'version': version}))
+def portable_source_identity(fingerprint):
+    # Same stable fact projection and canonical hashing as the existing DNS/App
+    # contract. Keep the original collector schema and host observations intact.
+    require(fingerprint['schema'] == 'fork-source-fingerprint-v1', 'collector schema differs')
+    facts = {key: fingerprint[key] for key in ('sourceCommit', 'sourceTree', 'sourceOverlay',
+        'goVersion', 'goModSha256', 'goSumSha256', 'replacement')}
+    return {'schema': 'polaris-production-source-v1', 'facts': facts,
+            'fingerprint': sha(canonical(facts).encode())}
+
+
+def verify_fingerprint(repo, fingerprint, expected, tree):
+    binding_path = repo / 'release/dependency-sources/sing-tun-replacement.json'
+    binding = {**json.loads(binding_path.read_bytes()), 'bindingSha256': digest(binding_path)}
+    facts = {'sourceCommit': expected, 'sourceTree': tree, 'sourceOverlay': 0, 'goVersion': 'go1.25.5',
+             'goModSha256': digest(repo / 'go.mod'), 'goSumSha256': digest(repo / 'go.sum'), 'replacement': binding}
+    require(portable_source_identity(fingerprint)['facts'] == facts
+            and fingerprint['replacementFilesVerified'] == 256
+            and fingerprint['isolatedGoSettings'] == {'GOENV': 'off', 'GOWORK': 'off', 'GOFLAGS': '', 'GOTOOLCHAIN': 'local'},
+            'actual source fingerprint facts differ')
+
+
+def platform_identity(fingerprint, key, version, tags, tag):
+    identity = portable_source_identity(fingerprint)
+    os_name, arch = key.split('/')
+    facts = {'sourceFingerprint': identity['fingerprint'], 'os': os_name, 'arch': arch,
+             'CGO_ENABLED': '1' if os_name == 'darwin' else '0', 'tags': sorted(tags.split(',')),
+             'version': version, 'tag': tag, 'goVersion': fingerprint['goVersion'], 'sourceOverlay': 0}
+    value = sha(canonical(facts).encode())
+    return {'schema': 'polaris-production-platform-v1', 'facts': facts,
+            'fingerprint': value, 'buildID': 'polaris-production-v1-' + value}
+
+
+def provider_identity(repo, fingerprint):
+    files = ['scripts/polaris_production_release.py', 'scripts/polaris_native_candidate.py',
+             'scripts/polaris_source_fingerprint.py', 'scripts/polaris_dns_identity.py',
+             'scripts/polaris_go_environment.py', 'scripts/polaris_native_distribution.py',
+             'release/polaris-production-release.json', 'release/polaris-candidate-inputs.json']
+    facts = {'providerContract': 'polaris-box-release-v1', 'sourceCommit': fingerprint['sourceCommit'],
+             'fileSha256': {name: digest(repo / name) for name in files}}
+    return {'schema': 'polaris-production-provider-v1', 'facts': facts,
+            'fingerprint': sha(canonical(facts).encode())}
+
+
+def build_identity(fingerprint, key, version, tags, tag):
+    return platform_identity(fingerprint, key, version, tags, tag)['buildID']
+
+
+def production_notice(repo, config, fingerprint, key):
+    pins = json.loads((repo / config['inputPinsPath']).read_bytes())
+    library = next(row for row in pins['libraries'] if row['target'] == key.replace('/', '_'))
+    return (f"Polaris-box {config['version']} / planned tag {config['tag']} / target {key}\n"
+        f"Product source: https://github.com/{config['repository']}/tree/{fingerprint['sourceCommit']}\n"
+        f"Product tree: {fingerprint['sourceTree']}; sourceOverlay: 0\n"
+        "sing-box: GPL-3.0-or-later. Root LICENSE, SING-BOX-COPYING and GPL-3.0.txt accompany this archive.\n"
+        "Go dependency versions/checksums: actual product source go.mod/go.sum; exact local sing-tun source is included.\n"
+        f"Corresponding source asset: polaris-box-{config['version']}-source.tar.gz\n"
+        f"Cronet Go wrapper: GPL-3.0-or-later; https://github.com/SagerNet/cronet-go/tree/{pins['wrapperCommit']}\n"
+        f"Cronet version: {pins['cronetVersion']}; library module: {library['module']}@{library['moduleVersion']}\n"
+        f"Library origin: {library['moduleOrigin']}; library SHA256: {library['sha256']}\n"
+        "Pinned library licenses/source inputs and the retained notice superset accompany this product.\n"
+        "Corresponding-source/notice applicability and compiler runtime approvals are recorded in the release index.\n"
+        "Native CLI diagnostics do not prove App/mobile/final carrier or device acceptance.\n").encode()
 
 
 def build_info(text, expected, build_id, key):
@@ -189,6 +254,9 @@ def repackage(repo, config, key, receipt, fingerprint, graph, version_output, ou
                 for d in graph['prebuiltAcquisitionModules']), 'unapproved acquisition module')
     members = dict(original)
     members[root + '/LICENSE'] = ((repo / 'LICENSE').read_bytes(), 0o644)
+    current_notice = production_notice(repo, config, fingerprint, key)
+    members[root + '/NOTICE'] = (current_notice, 0o644)
+    members[root + '/licenses/NOTICE'] = (current_notice, 0o644)
     members[root + '/licenses/DESKTOP-SOURCE-NOTICE-SUPERSET.txt'] = (notice, 0o644)
     source_record = {'schema': 'polaris-production-source-reference-v1', 'version': config['version'],
                      'sourceCommit': fingerprint['sourceCommit'], 'sourceTree': fingerprint['sourceTree'],
@@ -197,10 +265,19 @@ def repackage(repo, config, key, receipt, fingerprint, graph, version_output, ou
                      'sourceAsset': 'polaris-box-' + config['version'] + '-source.tar.gz',
                      'closureReview': 'pending-independent-applicability-and-compiler-runtime-review'}
     members[root + '/source/SOURCE-INDEX.json'] = (encode(source_record), 0o644)
+    portable = portable_source_identity(fingerprint)
+    platform = platform_identity(fingerprint, key, config['version'], receipt['tags'], config['tag'])
+    provider = provider_identity(repo, fingerprint)
     provenance = {**receipt, 'schema': 'polaris-production-native-receipt-v1', 'version': config['version'],
                   'tag': config['tag'], 'target': key, 'sourceFingerprint': fingerprint,
-                  'buildID': build_identity(fingerprint, key, config['version']),
-                  'buildGraph': graph, 'actualVersionOutput': version_output, 'candidateOnly': False,
+                  'buildID': build_identity(fingerprint, key, config['version'], receipt['tags'], config['tag']),
+                  'portableSourceIdentity': portable, 'portablePlatformIdentity': platform,
+                  'sourceIdentityFingerprint': portable['fingerprint'], 'platformInputFingerprint': platform['fingerprint'],
+                  'providerContract': provider['facts']['providerContract'], 'providerFingerprint': provider['fingerprint'],
+                  'providerIdentity': provider,
+                  'noticeIdentity': {'sourceCommit': fingerprint['sourceCommit'], 'sourceTree': fingerprint['sourceTree'],
+                                    'version': config['version'], 'tag': config['tag'], 'target': key, 'sha256': sha(current_notice)},
+                  'buildGraph': graph, 'actualVersionOutput': version_output, 'candidateOnly': True,
                   'publicationEligible': False, 'publicUploadPerformed': False,
                   'signatureObservation': {'core': {k: v for k, v in receipt['coreNative'].items()
                       if any(word in k.lower() for word in ('format', 'signature', 'certificate', 'authenticode'))},
@@ -245,7 +322,10 @@ def native(repo, source, expected, key, output):
         os.environ.pop(name, None)
     go = Path(shutil.which('go')).resolve()
     fp = collect(source, expected, go, output / 'module-list.json')
-    build_id = build_identity(fp, key, config['version'])
+    build_tags = (source / 'release' / ('DEFAULT_BUILD_TAGS_WINDOWS' if os_name == 'windows' else 'DEFAULT_BUILD_TAGS')).read_text().strip()
+    if os_name == 'linux':
+        build_tags += ',with_purego'
+    build_id = build_identity(fp, key, config['version'], build_tags, config['tag'])
     manifest = copy.deepcopy(json.loads((repo / config['inputPinsPath']).read_bytes()))
     manifest.update(sourceCommit=expected, sourceTree=tree, candidateVersion=config['version'],
                     upstreamBaselineCommit=config['upstreamCommit'], upstreamBaselineTag=config['upstreamTag'],
@@ -273,10 +353,12 @@ def native(repo, source, expected, key, output):
             (source / 'release/LDFLAGS').read_text().strip(), '-run', '^TestWindows(DNS|Lifecycle)', './...'],
             source / 'third_party/sing-tun', regression_env))
     receipt['archivePath'] = str(technical / receipt['archive']['name'])
-    final = repackage(repo, config, key, receipt, fp, graph, actual_version, output)
+    final_output = output / 'final'
+    final_output.mkdir()
+    final = repackage(repo, config, key, receipt, fp, graph, actual_version, final_output)
     final['buildID'] = build_id
     # Reload the final packaged bytes, rather than borrowing the technical archive's proof.
-    members = read_archive(output / final['archive']['name'], final['archive'])
+    members = read_archive(final_output / final['archive']['name'], final['archive'])
     import tempfile
     with tempfile.TemporaryDirectory(prefix='polaris-production-reload-') as directory:
         root = Path(directory)
@@ -301,7 +383,7 @@ def native(repo, source, expected, key, output):
                        root / basename(config, key) / row['sidecar'] if row['sidecar'] else None)
     final['buildID'] = build_id
     verify_source(source, expected)
-    (output / 'production-receipt.json').write_bytes(encode(final))
+    (final_output / 'production-receipt.json').write_bytes(encode(final))
     return {'target': key, 'archive': final['archive']['name'], 'publicationEligible': False}
 
 
@@ -316,7 +398,9 @@ def assemble(repo, expected, inputs, reused_source, output):
     config, tree = frozen_source(repo, expected)
     require(not output.exists(), 'fresh assembly output required')
     require(file_info(reused_source) == {k: config['reusedSource'][k] for k in ('name', 'bytes', 'sha256')}, 'reused source bytes differ')
-    receipts = [json.loads(f.read_bytes()) for f in inputs.rglob('production-receipt.json')]
+    receipt_paths = sorted(inputs.glob('*/final/production-receipt.json'))
+    require(all(path.is_file() and not path.is_symlink() for path in receipt_paths), 'regular final receipts required')
+    receipts = [json.loads(path.read_bytes()) for path in receipt_paths]
     keys = {x['target'] for x in receipts}
     require(len(receipts) == 6 and keys == {x['target'] for x in config['desktop']}, 'same-run six-target receipts required')
     run_id, attempt = os.environ.get('GITHUB_RUN_ID'), os.environ.get('GITHUB_RUN_ATTEMPT')
@@ -329,21 +413,27 @@ def assemble(repo, expected, inputs, reused_source, output):
              'gates': {'independentSourceReview': 'pending', 'licenseSourceReview': 'pending',
                        'AppOwnerSignoff': 'pending', 'actualPublicDownloadConsumerAcceptance': 'pending'}, 'platforms': []}
     normal, acquisition = set(), set()
-    for row in sorted(receipts, key=lambda x: x['target']):
+    for receipt_path, row in sorted(zip(receipt_paths, receipts), key=lambda x: x[1]['target']):
         require(row['schema'] == 'polaris-production-native-receipt-v1' and row['version'] == config['version']
                 and row['sourceCommit'] == expected and row['sourceTree'] == tree
                 and row['workflowCommit'] == expected and str(row['workflowRun']) == run_id
                 and str(row['workflowAttempt']) == attempt, 'mixed source/run/attempt/version receipt')
-        matching = list(inputs.rglob(row['archive']['name']))
-        require(len(matching) == 1, 'unique final archive required')
-        members = read_archive(matching[0], row['archive'])
+        verify_fingerprint(repo, row['sourceFingerprint'], expected, tree)
         spec = target(config, row['target'])
         root = basename(config, row['target'])
+        require(row['archive']['name'] == root + spec['suffix'], 'actual archive name differs')
+        archive = receipt_path.parent / (root + spec['suffix'])
+        require(archive.is_file() and not archive.is_symlink(), 'regular controlled final archive required')
+        require({path.name for path in receipt_path.parent.iterdir()} == {archive.name, receipt_path.name},
+                'final directory must contain exactly the archive and receipt')
+        members = read_archive(archive, row['archive'])
         provenance = json.loads(members[root + '/provenance.json'][0])
         for name in ('sourceCommit', 'sourceTree', 'version', 'tag', 'target', 'workflowCommit',
-                     'workflowRun', 'workflowAttempt', 'sourceFingerprint', 'buildGraph', 'buildID', 'signatureObservation'):
+                     'workflowRun', 'workflowAttempt', 'sourceFingerprint', 'buildGraph', 'buildID', 'signatureObservation',
+                     'portableSourceIdentity', 'portablePlatformIdentity', 'noticeIdentity',
+                     'sourceIdentityFingerprint', 'platformInputFingerprint', 'providerContract', 'providerFingerprint', 'providerIdentity'):
             require(provenance[name] == row[name], 'inner provenance and aggregate receipt differ: ' + name)
-        require(row['buildID'] == build_identity(row['sourceFingerprint'], row['target'], config['version']),
+        require(row['buildID'] == build_identity(row['sourceFingerprint'], row['target'], config['version'], row['tags'], config['tag']),
                 'source-derived BuildID differs')
         require(row['archive']['name'] == root + spec['suffix'], 'actual archive name differs')
         core = members[root + '/' + spec['executable']][0]
@@ -354,6 +444,10 @@ def assemble(repo, expected, inputs, reused_source, output):
             path = Path(directory) / spec['executable']
             path.write_bytes(core)
             graph = build_info(run(['go', 'version', '-m', path]), expected, row['buildID'], row['target'])
+            preset = (repo / 'release' / ('DEFAULT_BUILD_TAGS_WINDOWS' if row['target'].startswith('windows/') else 'DEFAULT_BUILD_TAGS')).read_text().strip()
+            tags = set(preset.split(',')) | ({'with_purego'} if row['target'].startswith('linux/') else set())
+            require(set(row['tags'].split(',')) == tags
+                    and set(graph['settings'].get('-tags', '').strip('"').split(',')) == tags, 'actual packaged full preset differs')
             require(graph == row['buildGraph'] and run(['go', 'tool', 'buildid', path]).strip() == row['buildID'],
                     'actual packaged Go graph/BuildID differs')
         if spec['sidecar']:
@@ -362,7 +456,18 @@ def assemble(repo, expected, inputs, reused_source, output):
                     and len(sidecar) == row['sidecar']['bytes'] and sha(sidecar) == row['cronet']['sha256'], 'actual sidecar pin differs')
             native_header(sidecar, row['target'])
         require(members[root + '/LICENSE'][0] == (repo / 'LICENSE').read_bytes(), 'root LICENSE differs')
-        shutil.copyfile(matching[0], output / matching[0].name)
+        notice = production_notice(repo, config, row['sourceFingerprint'], row['target'])
+        require(members[root + '/NOTICE'][0] == notice and members[root + '/licenses/NOTICE'][0] == notice
+                and row['noticeIdentity']['sha256'] == sha(notice), 'actual product NOTICE differs')
+        require(row['portableSourceIdentity'] == portable_source_identity(row['sourceFingerprint'])
+                and row['portablePlatformIdentity'] == platform_identity(row['sourceFingerprint'], row['target'],
+                    config['version'], row['tags'], config['tag']), 'portable source/platform facts differ')
+        provider = provider_identity(repo, row['sourceFingerprint'])
+        require(row['providerIdentity'] == provider and row['providerFingerprint'] == provider['fingerprint']
+                and row['providerContract'] == provider['facts']['providerContract']
+                and row['sourceIdentityFingerprint'] == row['portableSourceIdentity']['fingerprint']
+                and row['platformInputFingerprint'] == row['portablePlatformIdentity']['fingerprint'], 'provider/normalized identity differs')
+        shutil.copyfile(archive, output / archive.name)
         target(config, row['target'])
         actual_smoke = row.get('finalPackageCronetSmoke', {})
         validate_smoke(actual_smoke, row['nativeCronetSmoke'],
@@ -442,7 +547,7 @@ def recover_source(config, source_archive, expected_hash, expected_head, destina
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['plan', 'native', 'fetch-source', 'assemble', 'recover-source'])
+    parser.add_argument('mode', choices=['plan', 'verify-source', 'native', 'fetch-source', 'assemble', 'recover-source'])
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--source', type=Path)
     parser.add_argument('--expected-head')
@@ -456,6 +561,10 @@ def main():
     if args.mode == 'plan':
         result = {'version': config['version'], 'tag': config['tag'], 'matrix': TARGETS,
                   'consumerContract': config['consumerContract'], 'publicationEligible': False}
+    elif args.mode == 'verify-source':
+        require(args.expected_head, 'full source SHA required')
+        _, tree = frozen_source(args.repo, args.expected_head)
+        result = {'sourceCommit': args.expected_head, 'sourceTree': tree, 'cleanSourceVerified': True}
     elif args.mode == 'native':
         require(all([args.source, args.expected_head, args.target, args.output]), 'native arguments missing')
         result = native(args.repo, args.source, args.expected_head, args.target, args.output)
