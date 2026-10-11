@@ -122,6 +122,12 @@ class ProductionTests(unittest.TestCase):
                    'cronetNative': {'format': 'inert-fixture', 'signatureTrustValidated': False},
                    'cronet': {'sha256': production.sha(b'inert-library-fixture')}}
         fp = self.fingerprint()
+        bid = production.build_identity(fp, key, self.config['version'], tags, self.config['tag'])
+        flags = ((REPO / 'release/LDFLAGS').read_text().strip()
+                 + ' -s -w -X github.com/sagernet/sing-box/constant.Version=' + self.config['version']
+                 + ' -buildid=' + bid)
+        receipt.update(ldflags=flags, buildCommand=['go', 'build', '-buildvcs=true', '-mod=readonly',
+            '-p', '1', '-trimpath', '-tags', tags, '-ldflags', flags, '-o', str(core), './cmd/sing-box'])
         graph = {'normalModules': [{k: module[k] for k in ('module', 'version', 'h1')}], 'settings': {'-tags': tags},
                  'prebuiltAcquisitionModules': []}
         return receipt, fp, graph
@@ -204,23 +210,108 @@ class ProductionTests(unittest.TestCase):
             '\t=>\t' + production.REPLACEMENT + '\t(devel)',
             '\tbuild\tvcs.revision=' + HEAD, '\tbuild\tvcs.modified=false', '\tbuild\tGOOS=' + os_name,
             '\tbuild\tGOARCH=' + arch, '\tbuild\tCGO_ENABLED=' + ('1' if os_name == 'darwin' else '0'),
-            '\tbuild\t-tags=' + tags, '\tbuild\t-ldflags=-buildid=' + BUILD_ID])
+            '\tbuild\t-tags=' + tags, '\tbuild\t-trimpath=true'])
 
     def test_real_buildinfo_replacement_without_h1_is_supported(self):
-        graph = production.build_info(self.actual_info(), HEAD, BUILD_ID, 'linux/amd64')
+        graph = production.build_info(self.actual_info(), HEAD, 'linux/amd64')
         self.assertEqual(graph['localReplacement']['module'], production.MODULE)
         self.assertEqual(len(graph['normalModules']), 1)
 
     def test_buildinfo_rejects_dirty_wrong_vcs_arch_cgo_and_replacement(self):
         for old, new in [('vcs.modified=false', 'vcs.modified=true'), (HEAD, 'd' * 40),
                          ('GOARCH=amd64', 'GOARCH=arm64'), ('CGO_ENABLED=0', 'CGO_ENABLED=1'),
-                         (production.REPLACEMENT, '/tmp/external-replacement'), (BUILD_ID, 'wrong')]:
+                         (production.REPLACEMENT, '/tmp/external-replacement'), ('-trimpath=true', '-trimpath=false')]:
             with self.subTest(field=old), self.assertRaises(ValueError):
-                production.build_info(self.actual_info().replace(old, new), HEAD, BUILD_ID, 'linux/amd64')
+                production.build_info(self.actual_info().replace(old, new), HEAD, 'linux/amd64')
+
+    def test_trimpath_buildinfo_omits_ldflags_on_all_production_targets(self):
+        for row in self.config['desktop']:
+            key = row['target']
+            with self.subTest(target=key):
+                info = self.actual_info(key)
+                graph = production.build_info(info, HEAD, key)
+                self.assertEqual(graph['settings']['-trimpath'], 'true')
+                self.assertNotIn('-ldflags', graph['settings'])
+                for wrong in [info.replace('\tbuild\t-trimpath=true', ''),
+                              info + '\n\tbuild\t-ldflags=-buildid=' + BUILD_ID]:
+                    with self.assertRaisesRegex(ValueError, 'trimpath BuildInfo differs'):
+                        production.build_info(wrong, HEAD, key)
+
+    def test_build_command_binds_frozen_tags_ldflags_buildid_and_destination(self):
+        for row in self.config['desktop']:
+            key = row['target']
+            with self.subTest(target=key), tempfile.TemporaryDirectory() as directory:
+                receipt, fp, unused = self.fixture(Path(directory), key)
+                bid = production.build_identity(fp, key, self.config['version'], receipt['tags'], self.config['tag'])
+                production.validate_build_command(REPO, self.config, receipt, key, bid)
+                mutations = []
+                for index, value in [(0, 'other-go'), (2, '-buildvcs=false'), (3, '-mod=mod'),
+                                     (6, '-trimpath=false'), (8, 'with_quic'), (10, '-buildid=wrong'),
+                                     (12, '/tmp/foreign/core'), (13, './other-command')]:
+                    changed = copy.deepcopy(receipt)
+                    changed['buildCommand'][index] = value
+                    mutations.append(changed)
+                for field in ['tags', 'ldflags']:
+                    mutations.append({**receipt, field: 'changed'})
+                mutations.append({**receipt, 'buildCommand': []})
+                for changed in mutations:
+                    with self.assertRaisesRegex(ValueError, 'build command'):
+                        production.validate_build_command(REPO, self.config, changed, key, bid)
+                with self.assertRaisesRegex(ValueError, 'build command'):
+                    production.validate_build_command(REPO, self.config, receipt, key, 'wrong-measured-id')
+
+    def test_real_go1255_trimpath_binary_records_settings_and_measured_buildid(self):
+        go = Path(os.environ.get('POLARIS_TEST_GO', shutil.which('go') or '')).resolve()
+        environment = production.isolated_go_environment()
+        self.assertEqual(subprocess.check_output([str(go), 'env', 'GOVERSION'], env=environment,
+                                                text=True).strip(), 'go1.25.5',
+                         'Set POLARIS_TEST_GO to the approved Go1.25.5; do not change global Go.')
+        with tempfile.TemporaryDirectory(prefix='polaris-real-trimpath-') as directory:
+            root = Path(directory)
+            source = root / 'source'
+            source.mkdir()
+            (source / 'go.mod').write_text('module example.invalid/polaris-trimpath\n\ngo 1.25.5\n')
+            command_source = source / 'cmd/sing-box'
+            command_source.mkdir(parents=True)
+            (command_source / 'main.go').write_text('package main\nfunc main() {}\n')
+            for args in [['git', 'init', '--quiet'], ['git', 'add', '--', 'go.mod', 'cmd/sing-box/main.go'],
+                         ['git', '-c', 'user.name=Polaris trimpath test', '-c',
+                          'user.email=trimpath-test@example.invalid', 'commit', '--quiet', '-m', 'Tiny actual Go regression']]:
+                subprocess.run(args, cwd=source, check=True, capture_output=True)
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
+            environment.update(GOMAXPROCS='2', CGO_ENABLED='0', GOOS='linux', GOARCH='amd64',
+                GOAMD64='v1', GOMODCACHE=str(root / 'modules'),
+                GOCACHE=os.environ.get('POLARIS_TEST_GO_CACHE', str(root / 'cache')))
+            key = 'linux/amd64'
+            tags = (REPO / 'release/DEFAULT_BUILD_TAGS').read_text().strip() + ',with_purego'
+            bid = 'polaris-production-v1-' + 'b' * 64
+            flags = ((REPO / 'release/LDFLAGS').read_text().strip()
+                     + ' -s -w -X github.com/sagernet/sing-box/constant.Version=' + self.config['version']
+                     + ' -buildid=' + bid)
+            binary = root / production.basename(self.config, key) / 'sing-box'
+            binary.parent.mkdir()
+            command = ['go', 'build', '-buildvcs=true', '-mod=readonly', '-p', '1', '-trimpath',
+                       '-tags', tags, '-ldflags', flags, '-o', str(binary), './cmd/sing-box']
+            receipt = {'buildCommand': command, 'tags': tags, 'ldflags': flags}
+            production.validate_build_command(REPO, self.config, receipt, key, bid)
+            subprocess.run([str(go), *command[1:]], cwd=source, env=environment, check=True, capture_output=True)
+            info = subprocess.check_output([str(go), 'version', '-m', str(binary)], env=environment, text=True)
+            measured = subprocess.check_output([str(go), 'tool', 'buildid', str(binary)], env=environment, text=True).strip()
+            self.assertEqual(measured, bid)
+            settings = production.build_settings(info, head, key)
+            self.assertEqual(settings['-trimpath'], 'true')
+            self.assertNotIn('-ldflags', settings)
+            self.assertNotIn('-ldflags=', info)
+            with self.assertRaisesRegex(ValueError, 'build command'):
+                production.validate_build_command(REPO, self.config, receipt, key, 'wrong-measured-id')
+            print(json.dumps({'proof': 'real-Go1.25.5-tiny-trimpath-binary', 'goExecutable': str(go),
+                'goExecutableSha256': production.digest(go), 'microSourceCommit': head, 'buildCommand': command,
+                'binarySha256': production.digest(binary), 'actualBuildID': measured, 'actualBuildInfo': info,
+                'scope': 'actual tiny Go regression; not production native/App/device acceptance'}))
 
     def test_binary_acquisition_modules_remain_separate_from_go_source_zips(self):
         info = self.actual_info() + '\n\tdep\tgithub.com/sagernet/cronet-go/lib/darwin_amd64\tv1.0.0\th1:BBBB='
-        graph = production.build_info(info, HEAD, BUILD_ID, 'linux/amd64')
+        graph = production.build_info(info, HEAD, 'linux/amd64')
         self.assertEqual(len(graph['normalModules']), 1)
         self.assertEqual(len(graph['prebuiltAcquisitionModules']), 1)
 
@@ -324,7 +415,7 @@ class ProductionTests(unittest.TestCase):
                 bid = production.build_identity(fp, key, self.config['version'], receipt['tags'], self.config['tag'])
                 ids[key] = bid
                 info = self.actual_info(key).replace('h1:AAAA=', graph['normalModules'][0]['h1']).replace(BUILD_ID, bid)
-                graph = production.build_info(info, HEAD, bid, key)
+                graph = production.build_info(info, HEAD, key)
                 graphs[key] = info
                 out = platform / 'final'
                 out.mkdir()
@@ -374,6 +465,15 @@ class ProductionTests(unittest.TestCase):
                 for line in (base / 'final/SHA256SUMS').read_text().splitlines():
                     expected, name = line.split('  ')
                     self.assertEqual(production.digest(base / 'final' / name), expected)
+                # BuildInfo lacks ldflags, so verify the actual binary BuildID gate
+                # still rejects a different measured ID during assembly.
+                def wrong_buildid(args, *unused):
+                    if args[:3] == ['go', 'tool', 'buildid']:
+                        return 'wrong-measured-binary-id'
+                    return static_read(args, *unused)
+                with patch.object(production, 'run', side_effect=wrong_buildid):
+                    with self.assertRaisesRegex(ValueError, 'actual packaged Go graph/BuildID differs'):
+                        production.assemble(REPO, HEAD, inputs, old, base / 'wrong-buildid-output')
                 source = base / 'final' / index['sourceAsset']['name']
                 production.recover_source(config, source, index['sourceAsset']['sha256'], HEAD, base / 'recovered-input')
                 self.assertEqual((base / 'recovered-input').read_bytes(), old.read_bytes())

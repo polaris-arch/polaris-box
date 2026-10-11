@@ -158,25 +158,55 @@ def production_notice(repo, config, fingerprint, key):
         "Native CLI diagnostics do not prove App/mobile/final carrier or device acceptance.\n").encode()
 
 
-def build_info(text, expected, build_id, key):
+def validate_build_command(repo, config, receipt, key, build_id):
+    preset = 'DEFAULT_BUILD_TAGS_WINDOWS' if key.startswith('windows/') else 'DEFAULT_BUILD_TAGS'
+    tags = (repo / 'release' / preset).read_text().strip()
+    if key.startswith('linux/'):
+        tags += ',with_purego'
+    flags = ((repo / 'release/LDFLAGS').read_text().strip()
+             + ' -s -w -X github.com/sagernet/sing-box/constant.Version=' + config['version']
+             + ' -buildid=' + build_id)
+    command = receipt.get('buildCommand')
+    require(isinstance(command, list) and len(command) == 14 and isinstance(command[12], str),
+            'actual build command shape differs')
+    expected = ['go', 'build', '-buildvcs=true', '-mod=readonly', '-p', '1', '-trimpath',
+                '-tags', tags, '-ldflags', flags, '-o', command[12], './cmd/sing-box']
+    suffix = '/' + basename(config, key) + '/' + target(config, key)['executable']
+    require(command == expected and command[12].replace('\\', '/').endswith(suffix)
+            and receipt.get('tags') == tags and receipt.get('ldflags') == flags,
+            'actual build command/ldflags differ from frozen source inputs')
+
+
+def build_settings(text, expected, key):
     require(text.splitlines()[0].endswith('go1.25.5'), 'actual binary Go version differs')
-    settings, deps, replacements = {}, [], []
+    settings = {}
     for line in text.splitlines():
         parts = line.split('\t')
         if len(parts) >= 3 and parts[1] == 'build':
             name, value = parts[2].split('=', 1)
             settings[name] = value
-        elif len(parts) >= 4 and parts[1] == 'dep':
+    os_name, arch = key.split('/')
+    require(settings.get('vcs.revision') == expected and settings.get('vcs.modified') == 'false', 'actual binary VCS identity differs')
+    require(settings.get('GOOS') == os_name and settings.get('GOARCH') == arch, 'actual binary target differs')
+    require(settings.get('CGO_ENABLED') == ('1' if os_name == 'darwin' else '0'), 'actual CGO differs')
+    # Go 1.25.5 deliberately omits -ldflags under -trimpath (go.dev/issue/52372).
+    # Native and assembly independently read the actual binary using go tool buildid.
+    require(settings.get('-trimpath') == 'true' and '-ldflags' not in settings,
+            'actual binary trimpath BuildInfo differs')
+    return settings
+
+
+def build_info(text, expected, key):
+    settings = build_settings(text, expected, key)
+    deps, replacements = [], []
+    for line in text.splitlines():
+        parts = line.split('\t')
+        if len(parts) >= 4 and parts[1] == 'dep':
             deps.append({'module': parts[2], 'version': parts[3], 'h1': parts[4] if len(parts) >= 5 else ''})
         elif len(parts) >= 4 and parts[1] == '=>':
             require(deps and deps[-1]['module'] == MODULE and deps[-1]['version'] == VERSION
                     and parts[2:4] == [REPLACEMENT, '(devel)'], 'unexpected binary module replacement')
             replacements.append(deps.pop())
-    os_name, arch = key.split('/')
-    require(settings.get('vcs.revision') == expected and settings.get('vcs.modified') == 'false', 'actual binary VCS identity differs')
-    require(settings.get('GOOS') == os_name and settings.get('GOARCH') == arch, 'actual binary target differs')
-    require(settings.get('CGO_ENABLED') == ('1' if os_name == 'darwin' else '0'), 'actual CGO differs')
-    require('-buildid=' + build_id in settings.get('-ldflags', ''), 'actual linker BuildID input differs')
     require(len(replacements) == 1 and deps and all(re.fullmatch(r'h1:[A-Za-z0-9+/]+=', d['h1']) for d in deps),
             'actual complete module/replacement graph required')
     acquisition = [d for d in deps if d['module'].startswith('github.com/sagernet/cronet-go/lib/')]
@@ -335,7 +365,8 @@ def native(repo, source, expected, key, output):
     binary = technical / basename(config, key) / target(config, key)['executable']
     actual_version = run([binary, 'version'], source)
     require(run([go, 'tool', 'buildid', binary], source).strip() == build_id, 'actual BuildID differs')
-    graph = build_info(receipt['buildInfo'], expected, build_id, key)
+    validate_build_command(source, config, receipt, key, build_id)
+    graph = build_info(receipt['buildInfo'], expected, key)
     tags = receipt['tags']
     regression_env = dict(os.environ)
     if os_name == 'darwin':
@@ -430,11 +461,13 @@ def assemble(repo, expected, inputs, reused_source, output):
         provenance = json.loads(members[root + '/provenance.json'][0])
         for name in ('sourceCommit', 'sourceTree', 'version', 'tag', 'target', 'workflowCommit',
                      'workflowRun', 'workflowAttempt', 'sourceFingerprint', 'buildGraph', 'buildID', 'signatureObservation',
+                     'tags', 'ldflags', 'buildCommand',
                      'portableSourceIdentity', 'portablePlatformIdentity', 'noticeIdentity',
                      'sourceIdentityFingerprint', 'platformInputFingerprint', 'providerContract', 'providerFingerprint', 'providerIdentity'):
             require(provenance[name] == row[name], 'inner provenance and aggregate receipt differ: ' + name)
         require(row['buildID'] == build_identity(row['sourceFingerprint'], row['target'], config['version'], row['tags'], config['tag']),
                 'source-derived BuildID differs')
+        validate_build_command(repo, config, row, row['target'], row['buildID'])
         require(row['archive']['name'] == root + spec['suffix'], 'actual archive name differs')
         core = members[root + '/' + spec['executable']][0]
         require(sha(core) == row['core']['sha256'] and len(core) == row['core']['bytes'], 'actual core pin differs')
@@ -443,7 +476,7 @@ def assemble(repo, expected, inputs, reused_source, output):
         with tempfile.TemporaryDirectory(prefix='polaris-production-static-identity-') as directory:
             path = Path(directory) / spec['executable']
             path.write_bytes(core)
-            graph = build_info(run(['go', 'version', '-m', path]), expected, row['buildID'], row['target'])
+            graph = build_info(run(['go', 'version', '-m', path]), expected, row['target'])
             preset = (repo / 'release' / ('DEFAULT_BUILD_TAGS_WINDOWS' if row['target'].startswith('windows/') else 'DEFAULT_BUILD_TAGS')).read_text().strip()
             tags = set(preset.split(',')) | ({'with_purego'} if row['target'].startswith('linux/') else set())
             require(set(row['tags'].split(',')) == tags
