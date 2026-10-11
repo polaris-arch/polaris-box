@@ -1,26 +1,40 @@
 name: Polaris native CLI candidate (no publication)
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: all or comma-separated os/arch from the six fixed native targets
+        type: string
+        required: true
+        default: all
 permissions:
   contents: read
 concurrency:
   group: polaris-native-candidate-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  select_targets:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          path: producer
+          persist-credentials: false
+      - id: matrix
+        env:
+          CANDIDATE_PLATFORM: ${{ inputs.platform }}
+        run: python3 producer/scripts/polaris_native_matrix.py
   native_cli:
+    needs: select_targets
     name: Native ${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        include:
-          - {os: linux, arch: amd64, tool_arch: x64, runner: ubuntu-24.04}
-          - {os: linux, arch: arm64, tool_arch: arm64, runner: ubuntu-24.04-arm}
-          - {os: windows, arch: amd64, tool_arch: x64, runner: windows-2025}
-          - {os: windows, arch: arm64, tool_arch: arm64, runner: windows-11-arm}
-          - {os: darwin, arch: amd64, tool_arch: x64, runner: macos-15-intel}
-          - {os: darwin, arch: arm64, tool_arch: arm64, runner: macos-15}
+        include: ${{ fromJSON(needs.select_targets.outputs.matrix) }}
     env:
       GOTOOLCHAIN: local
       GOMAXPROCS: '2'
