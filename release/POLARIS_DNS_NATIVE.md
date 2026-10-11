@@ -16,7 +16,7 @@ its h1 sum authenticates the baseline ZIP, not the modified local replacement.
 Full replacement tree/binding/patch and actual binary replacement records are
 mandatory. Root go.mod/go.sum and both source helper hashes are pinned.
 
-The existing registered polaris-native-candidate.yml path is used for a single
+The polaris-dns-native-candidate.yml path supports a single
 manual fixed-head run, four native jobs in sequence: Linux amd64, Windows amd64,
 macOS amd64 and macOS arm64. No ARM Windows/Linux extra build is scheduled.
 The two foreign libraries remain frozen download-only negative fixtures.
@@ -28,6 +28,17 @@ native architecture are explicit; macOS uses the already verified SDK flags.
 Cronet libraries are downloaded at their exact original module/h1/blob/byte
 identities. Linux/Windows use prebuilt so/dll; macOS links the prebuilt .a.
 This workflow never rebuilds Chromium/Cronet or globally upgrades toolchains.
+
+The DNS technical lane uses polaris-dns-native-candidate.yml and
+scripts/polaris_dns_native_candidate.py. The a01 six-platform lane keeps its
+original polaris-native-candidate.yml and scripts/polaris_native_candidate.py
+entry points. DNS reuses their identical archive, Cronet and native-host helpers;
+its isolated Go/VCS/replacement checks and technical receipt schema remain intact.
+Both fixed input manifests are unchanged. The a01 lane reads release/licenses/NOTICE;
+the DNS lane reads the original DNS bytes from release/licenses/DNS-NOTICE and
+packages them as licenses/NOTICE with the unchanged DNS manifest hash. Historical
+producer SHA/run/receipt identities stay attached to their original executions;
+moving the live entry point does not rerun or relabel the completed technical batch.
 
 Each job freshly collects source identity and module JSON, runs the real Windows
 DNS helper tests (including native Windows early guards), builds a new kernel,

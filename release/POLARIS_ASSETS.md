@@ -78,8 +78,10 @@ submodule is `be1be963131154ba82761a7ed85ba426b2027319`.
 
 CGO files call the Cronet C ABI and link `.a`; purego files register the C functions
 through Dlopen/Dlsym (Unix) or LoadLibrary/GetProcAddress (Windows). The pinned
-Unix loader requires 255 symbols; Windows requires 253, with the two floating-point
-helpers supplied in Go. Both include custom engine and dialer interfaces; a version string or string count alone is not ABI proof.
+Unix loader requires 255 symbols. On Windows amd64/arm64, loader_windows.go
+registers 253 C exports and loader_windows_float.go registers two additional
+network-thread-priority C exports, for the same total of 255. Both include custom
+engine and dialer interfaces; a version string or string count alone is not ABI proof.
 The Windows imports are OS DLLs, not evidence of a bundled Visual C++ runtime.
 Validate all imports on the actual supported OS; ELF DT_NEEDED, libc symbol
 versions, ELF/PE machine/class and Mach-O CPU/platform/deployment commands must be
