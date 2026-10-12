@@ -180,7 +180,7 @@
   },
   "openwrtInputs": {
     "path": "release/polaris-openwrt-inputs.json",
-    "sha256": "c3dba6c9cbcd4fbfc9721f7f5833075079625c85c1047f9cff7d19b32b92fc2b"
+    "sha256": "7692136566ae14ddf3534f6e46f045c56591fe52618e03f64221b030c7080a31"
   },
   "openwrt": {
     "architectures": [

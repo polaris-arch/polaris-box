@@ -16,6 +16,8 @@ Polaris-box already has remote CI. Complete the batch's feature/interface/build/
 
 The manual production workflow runs the Python/source contract suite, six native desktop builds, two actual static musl core/package builds, four official isolated OpenWrt guest lifecycle/runtime gates and same-run assembly. Each core requires clean standalone source and actual BuildInfo/BuildID. Guests verify generic CPU profiles, official kernel/root hashes, real package dependencies, explicit 0:0 archive/control/directory ownership, conflict rejection, true old-prerm→new-preinst active upgrade/configuration retention/removal/reinstall, procd, CA-bundle, real Naive TLS-H2 plus wrong-CA rejection, and actual gVisor TUN traffic. User-mode VM networking is isolated; no physical device, host TAP or host routes are changed. Actual guest checks do not certify every board/CPU or replace physical-device acceptance.
 
+IPK uses host fakeroot for numeric root ownership. APK uses the SDK-native account database to map the private staging UID/GID to root names; its bundled loader never inherits a host GLIBC preload. Final IPK tar/APK ADB metadata and all installed paths still require root ownership. This preserves the pinned SDK and leaves system toolchains unchanged.
+
 The aggregate index keeps `platforms` as the original six desktop producer rows and records OpenWrt separately in `openwrtPlatforms`. Same source/tree/version/run/attempt and actual archive/core/package bytes must match. Formal native CI cannot be replaced by old local fixtures or historical green runs. Candidate publication remains false until the parent approves the whole source/license/layout and actual output batch.
 
 ## Corresponding source

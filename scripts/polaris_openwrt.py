@@ -145,6 +145,22 @@ def root_owned_command(root,command):
     return ['fakeroot','-l',str(fakeroot_library()),'sh','-ec','chown -hR 0:0 "$1"; shift; exec "$@"',
             'polaris-root-owned-archive',str(root),*[str(x) for x in command]]
 
+def apk_owner_root(directory):
+    # APK archives store account names. Map this private staging UID/GID to
+    # root:root with the SDK's native --root identity database; the guest's
+    # root account resolves these names to numeric 0:0 on installation.
+    (directory/'etc').mkdir(parents=True)
+    (directory/'etc/passwd').write_text(f'root:x:{os.getuid()}:{os.getgid()}:root:/root:/bin/false\n')
+    (directory/'etc/group').write_text(f'root:x:{os.getgid()}:\n')
+    return directory
+
+def apk_native_environment(environment):
+    # The SDK wrapper supplies its matching loader/libraries and runas.so.
+    # A host fakeroot preload has a different GLIBC ABI and must not enter it.
+    result=dict(environment)
+    for key in ['LD_PRELOAD','LD_LIBRARY_PATH']:result.pop(key,None)
+    return result
+
 def archive_ownership(path,form,apk=None):
     owners={}
     if form=='ipk':
@@ -160,7 +176,7 @@ def archive_ownership(path,form,apk=None):
                             require(entry.uid==0 and entry.gid==0,'IPK payload/control member is not root:root: '+entry.name)
                             owners[member.name+'/'+entry.name]={'uid':entry.uid,'gid':entry.gid,'mode':entry.mode}
     else:
-        dump=json.loads(run([apk,'adbdump','--format','json',path]))
+        dump=json.loads(run([apk,'adbdump','--format','json',path],env=apk_native_environment(os.environ)))
         require(isinstance(dump.get('paths'),list) and dump['paths'],'complete APK path metadata required')
         for directory in dump['paths']:
             items=[(directory.get('name',''),directory)]
@@ -205,9 +221,7 @@ def package(repo, config, core, architecture, form, sdk, work, output, source_re
         (metadata / 'polaris-box.conffiles_static').write_text(''.join(
             f'{name} {sha((root / name.lstrip("/")).read_bytes())}\n' for name in config['package']['configs']))
         (metadata / 'polaris-box.list').write_text(''.join('/' + name + '\n' for name in sorted(inventory)))
-        owner_root = work / (architecture + '-apk-owners');(owner_root / 'etc').mkdir(parents=True)
-        (owner_root / 'etc/passwd').write_text('root:x:0:0:root:/root:/bin/false\n')
-        (owner_root / 'etc/group').write_text('root:x:0:\n')
+        owner_root = apk_owner_root(work / (architecture + '-apk-owners'))
         command = [sdkroot / 'staging_dir/host/bin/apk', '--root', owner_root, 'mkpkg',
             '--info', 'name:polaris-box', '--info', 'version:' + version,
             '--info', 'description:Polaris-box musl static proxy platform', '--info', 'arch:' + architecture,
@@ -221,8 +235,7 @@ def package(repo, config, core, architecture, form, sdk, work, output, source_re
             '--script', 'pre-deinstall:' + str(repo / 'release/openwrt/prerm'),
             '--script', 'post-deinstall:' + str(repo / 'release/openwrt/postrm'),
             '--files', root, '--output', output]
-        command=root_owned_command(root,command)
-        log = run(command, env=env)
+        log = run(command, env=apk_native_environment(env))
     (work / (architecture + '-' + form + '-packager.log')).write_text(log)
     return {'architecture': architecture, 'format': form, 'packageVersion': version,
             'package': file_info(output), 'core': file_info(core), 'payloadInventory': inventory,
@@ -462,12 +475,11 @@ def private_guest_fixtures(repo, config, core, architecture, sdk, apk_sdk, outpu
             run(root_owned_command(root,['sh',Path(sdk['root'])/'scripts/ipkg-build',root,generated]),env=dict(os.environ,SOURCE_DATE_EPOCH='0'))
             files=list(generated.glob('*.ipk'));require(len(files)==1,'private conflict inventory differs');shutil.copyfile(files[0],destination)
         else:
-            owners=output/('conflict-owners-'+form);(owners/'etc').mkdir(parents=True)
-            (owners/'etc/passwd').write_text('root:x:0:0:root:/root:/bin/false\n');(owners/'etc/group').write_text('root:x:0:\n')
+            owners=apk_owner_root(output/('conflict-owners-'+form))
             command=[Path(apk_sdk['root'])/'staging_dir/host/bin/apk','--root',owners,'mkpkg',
                 '--info','name:sing-box','--info','version:0.0.1-r1','--info','arch:'+architecture,
                 '--info','description:private package conflict fixture','--info','license:GPL-3.0-or-later','--files',root,'--output',destination]
-            run(root_owned_command(root,command))
+            run(command,env=apk_native_environment(os.environ))
         archive_ownership(destination,form,Path(apk_sdk['root'])/'staging_dir/host/bin/apk' if form=='apk' else None)
         records['conflict-'+form]=file_info(destination)
     return records

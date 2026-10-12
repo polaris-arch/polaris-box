@@ -50,7 +50,11 @@
     "retainConfigurationOnRemoval": true,
     "replacementPolicy": "explicit removal after independent configuration backup; never implicit overwrite",
     "archiveOwnership": "all payload/control filesystem entries explicit root:root (0:0), final IPK tar/APK ADB metadata and installed paths audited",
-    "apkTrustPolicy": "unsigned local APK only after frozen published byte-pin validation; allow-untrusted for that single local archive; no global/repository trust change"
+    "apkTrustPolicy": "unsigned local APK only after frozen published byte-pin validation; allow-untrusted for that single local archive; no global/repository trust change",
+    "ownershipStrategy": {
+      "ipk": "host fakeroot virtual numeric 0:0; audit all final tar entries",
+      "apk": "SDK native identity database maps actual private staging UID/GID to root account names; no host GLIBC preload; audit all final ADB ACLs and installed numeric 0:0"
+    }
   },
   "dependencies": [
     "ca-bundle",

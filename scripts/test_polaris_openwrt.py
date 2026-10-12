@@ -97,6 +97,24 @@ class OwnershipRegressionTests(unittest.TestCase):
             self.assertEqual(args[7],'/private payload')
 
 
+class APKNativeOwnerRegressionTests(unittest.TestCase):
+    def test_actual_staging_identity_maps_to_root_account_names(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(ow.os,'getuid',return_value=1001), patch.object(ow.os,'getgid',return_value=1002):
+            root=ow.apk_owner_root(Path(directory)/'identities')
+            self.assertEqual((root/'etc/passwd').read_text(),'root:x:1001:1002:root:/root:/bin/false\n')
+            self.assertEqual((root/'etc/group').read_text(),'root:x:1002:\n')
+    def test_sdk_loader_never_inherits_host_glibc_preloads(self):
+        original={'LD_PRELOAD':'/host/libfakeroot.so','LD_LIBRARY_PATH':'/host/glibc', 'SOURCE_DATE_EPOCH':'0'}
+        self.assertEqual(ow.apk_native_environment(original),{'SOURCE_DATE_EPOCH':'0'})
+        self.assertIn('LD_PRELOAD',original)
+    def test_actual_root_account_names_pass_directory_and_file_ownership_audit(self):
+        acl={'mode':493,'user':'root','group':'root'}
+        with patch.object(ow,'run',return_value=json.dumps({'paths':[{'name':'usr/bin','acl':acl,'files':[{'name':'sing-box','acl':acl}]}]})):
+            result=ow.archive_ownership(Path('inert.apk'),'apk',Path('/inert/apk'))
+        self.assertEqual(set(result['members']),{'usr/bin','usr/bin/sing-box'})
+        self.assertTrue(all(x['uid']==x['gid']==0 for x in result['members'].values()))
+
+
 class GuestProtocolRegressionTests(unittest.TestCase):
     def test_ssh_warning_is_not_part_of_version_or_json_stdout(self):
         import polaris_openwrt_guest as guest
