@@ -178,6 +178,24 @@ class NaiveNamespaceRegressionTests(unittest.TestCase):
             self.assertFalse(fixture.certificate_rejection(message))
 
 
+class TUNFixtureRegressionTests(unittest.TestCase):
+    def test_linux_interface_byte_limit_and_actual_config_name(self):
+        import polaris_openwrt_guest as guest
+        config=guest.fixture_tun_config();name=config['inbounds'][0]['interface_name']
+        self.assertEqual(name,guest.TUN_INTERFACE_NAME);self.assertLess(len(name.encode()),16)
+        self.assertEqual(guest.fixture_tun_config('x'*15)['inbounds'][0]['interface_name'],'x'*15)
+        for invalid in ['polaris-test-tun','x'*16,'界'*6,'','bad/name','bad name','bad\x00name']:
+            with self.subTest(name=invalid),self.assertRaises(ValueError):guest.fixture_tun_config(invalid)
+        self.assertEqual(config['inbounds'][0]['stack'],'gvisor');self.assertFalse(config['inbounds'][0]['auto_route'])
+    def test_failed_process_is_bound_to_exact_config_and_remains_a_failure(self):
+        import polaris_openwrt_guest as guest
+        state={'sing-box':{'instances':{'one':{'running':False,'exit_code':1,'command':['core','run','-c','/etc/sing-box/config.json']}}}}
+        self.assertEqual(guest.phase_exit_failure(state,'/etc/sing-box/config.json'),1)
+        self.assertIsNone(guest.phase_exit_failure(state,'/tmp/client.json'))
+        state['sing-box']['instances']['one']['running']=True
+        self.assertIsNone(guest.phase_exit_failure(state,'/etc/sing-box/config.json'))
+
+
 class GuestProtocolRegressionTests(unittest.TestCase):
     def test_ssh_warning_is_not_part_of_version_or_json_stdout(self):
         import polaris_openwrt_guest as guest

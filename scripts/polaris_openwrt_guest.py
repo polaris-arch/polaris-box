@@ -19,6 +19,27 @@ from polaris_native_distribution import encode, file_info
 from polaris_go_environment import verify_source
 from polaris_naive_loopback import main as naive_loopback, matching_phase_pids
 
+TUN_INTERFACE_NAME='polaris-gv0'
+
+def fixture_tun_config(name=TUN_INTERFACE_NAME):
+    # Linux IFNAMSIZ includes the trailing NUL, so the name has at most15 bytes.
+    require(isinstance(name,str) and 0<len(name.encode())<16
+            and not any(c in name for c in '\x00/ :\t\n'), 'invalid fixture TUN interface name')
+    return {'log':{'level':'debug','output':'/tmp/polaris-gvisor.log'},
+        'inbounds':[{'type':'tun','tag':'actual-gvisor','interface_name':name,
+            'address':['172.31.99.1/30'],'auto_route':False,'stack':'gvisor'}],
+        'outbounds':[{'type':'direct'}],
+        'route':{'rules':[{'ip_cidr':['198.18.0.1/32'],'action':'route-options',
+            'override_address':'127.0.0.1','override_port':18081}]}}
+
+def phase_exit_failure(state,config_path):
+    for entry in state.get('sing-box',{}).get('instances',{}).values():
+        command=entry.get('command',[])
+        if isinstance(command,list) and any(command[i:i+2]==['-c',config_path] for i in range(len(command)-1)):
+            if entry.get('running') is False and type(entry.get('exit_code')) is int and entry['exit_code']!=0:
+                return entry['exit_code']
+    return None
+
 def port():
     with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 
@@ -181,9 +202,8 @@ def validate(repo,expected,architecture,form,inputs,output):
         require(naive['actualOpenWrtGuestClient'] and naive['caBundleUsed'] and naive['responses']['trusted']['accepted']
             and not naive['responses']['wrong']['accepted'],'actual guest Naive TLS-H2/CA controls failed')
         checks['naiveTLSH2']=True;checks['wrongCARejected']=True
-        tun_config={'log':{'level':'debug','output':'/tmp/polaris-gvisor.log'},'inbounds':[{'type':'tun','tag':'actual-gvisor','interface_name':'polaris-test-tun',
-            'address':['172.31.99.1/30'],'auto_route':False,'stack':'gvisor'}], 'outbounds':[{'type':'direct'}],
-            'route':{'rules':[{'ip_cidr':['198.18.0.1/32'],'action':'route-options','override_address':'127.0.0.1','override_port':18081}]}}
+        tun_config=fixture_tun_config();tun_name=tun_config['inbounds'][0]['interface_name']
+        (output/'gvisor-config-observation.json').write_bytes(encode(tun_config))
         execute('cat > /etc/sing-box/config.json',data=json.dumps(tun_config).encode())
         execute("mkdir -p /tmp/polaris-www; printf '%s' actual-gvisor-tun-response > /tmp/polaris-www/token; "
                 "uhttpd -f -p 127.0.0.1:18081 -h /tmp/polaris-www >/tmp/httpd.log 2>&1 & "
@@ -197,13 +217,16 @@ def validate(repo,expected,architecture,form,inputs,output):
         deadline=time.monotonic()+90
         while time.monotonic()<deadline:
             procd=json.loads(execute("ubus call service list '{\"name\":\"sing-box\"}'"))
-            probe=ssh_command(ssh,'ip link show polaris-test-tun',timeout=10)
+            (output/'gvisor-procd-observation.json').write_bytes(encode(procd))
+            failure=phase_exit_failure(procd,'/etc/sing-box/config.json')
+            if failure is not None:raise RuntimeError('exact gvisor phase exited '+str(failure)+'; see procd/runtime/syslog diagnostics')
+            probe=ssh_command(ssh,'ip link show '+shlex.quote(tun_name),timeout=10)
             event_log.write('TUN READINESS\n'+probe.stdout.decode(errors='replace')+probe.stderr.decode(errors='replace')+'\nEXIT '+str(probe.returncode)+'\n');event_log.flush()
             if len(matching_phase_pids(procd,'/etc/sing-box/config.json'))==1 and probe.returncode==0:break
             time.sleep(.2)
         else:raise TimeoutError('exact gvisor procd/config/TUN phase did not become ready')
         checks['procd']=True
-        execute('ip route add 198.18.0.1/32 dev polaris-test-tun')
+        execute('ip route add 198.18.0.1/32 dev '+shlex.quote(tun_name))
         require(b'actual-gvisor-tun-response' in execute('wget -T 15 -qO- http://198.18.0.1:18081/token'),'actual gvisor TUN request failed');checks['gvisorTUN']=True
         require(receipt['core']['sha256'].encode() in execute('sha256sum /usr/bin/sing-box'),'running core identity changed')
         (output/'procd-observation.json').write_bytes(encode(procd));(output/'cronet-observation.json').write_bytes(encode(smoke))
@@ -222,11 +245,17 @@ def validate(repo,expected,architecture,form,inputs,output):
         try:
             try:
                 if process and process.poll() is None:
-                    for remote,local in [('/tmp/polaris-gvisor.log','gvisor-runtime.log'),('/tmp/httpd.log','gvisor-httpd.log')]:
+                    diagnostics=[('cat /tmp/polaris-gvisor.log','gvisor-runtime.log'),
+                        ('cat /tmp/httpd.log','gvisor-httpd.log'),('cat /tmp/http-probe.log','gvisor-http-probe.log'),
+                        ('logread','gvisor-syslog.log'),('ip link; ip route','gvisor-links-routes.log'),
+                        ('cat /etc/sing-box/config.json','gvisor-actual-config.log')]
+                    for command,local in diagnostics:
                         try:
-                            diagnostic=ssh_command(ssh,'cat '+shlex.quote(remote),timeout=10)
-                            (output/local).write_bytes(diagnostic.stdout+diagnostic.stderr)
-                        except (OSError,subprocess.SubprocessError) as error:(output/(local+'.capture-error')).write_text(str(error)+'\n')
+                            diagnostic=ssh_command(ssh,command,timeout=10)
+                            (output/local).write_bytes(diagnostic.stdout)
+                            (output/(local+'.stderr.log')).write_bytes(diagnostic.stderr)
+                            event_log.write('DIAGNOSTIC '+command+' EXIT '+str(diagnostic.returncode)+'\n');event_log.flush()
+                        except (OSError,subprocess.SubprocessError) as error:(output/(local+'.capture-error.log')).write_text(str(error)+'\n')
             finally:
                 if process and process.poll() is None:
                     try:os.killpg(process.pid,signal.SIGTERM)
