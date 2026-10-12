@@ -66,4 +66,62 @@ class OpenWrtTests(unittest.TestCase):
             root=Path(d);inputs=root/'inputs';inputs.mkdir();guests=root/'guests';guests.mkdir()
             with self.assertRaisesRegex(ValueError,'two OpenWrt'):ow.validate_assembled_openwrt(REPO,'a'*40,'b'*40,inputs,guests,root/'out','20','1')
 
+
+class OwnershipRegressionTests(unittest.TestCase):
+    def ipk(self,root,bad_section=None):
+        import io,tarfile
+        path=root/'fixture.ipk'
+        with tarfile.open(path,'w:gz') as outer:
+            for section in ['control.tar.gz','data.tar.gz']:
+                buffer=io.BytesIO()
+                with tarfile.open(fileobj=buffer,mode='w:gz') as inner:
+                    entry=tarfile.TarInfo('control' if section.startswith('control') else './usr/bin/sing-box')
+                    entry.uid=1001 if section==bad_section else 0;entry.gid=0;entry.size=4;inner.addfile(entry,io.BytesIO(b'test'))
+                raw=buffer.getvalue();entry=tarfile.TarInfo(section);entry.uid=entry.gid=0;entry.size=len(raw);outer.addfile(entry,io.BytesIO(raw))
+        return path
+    def test_all_payload_and_control_archive_members_must_be_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            self.assertEqual(len(ow.archive_ownership(self.ipk(root),'ipk')['members']),4)
+            for section in ['control.tar.gz','data.tar.gz']:
+                with self.subTest(section=section),self.assertRaisesRegex(ValueError,'root:root'):
+                    ow.archive_ownership(self.ipk(root,section),'ipk')
+    def test_apk_all_directory_and_file_acl_owners_are_checked(self):
+        with patch.object(ow,'run',return_value=json.dumps({'paths':[{'name':'usr','acl':{'mode':493,'user':'root','group':'root'},'files':[{'name':'bin','acl':{'mode':493,'user':'1001','group':'root'}}]}]})):
+            with self.assertRaisesRegex(ValueError,'root:root'):ow.archive_ownership(Path('inert.apk'),'apk',Path('/inert/apk'))
+    def test_packaging_command_explicitly_sets_virtual_root_ownership(self):
+        with patch.object(ow.shutil,'which',return_value='/usr/bin/fakeroot'), patch.object(ow,'fakeroot_library',return_value=Path('/fixed/libfakeroot.so')):
+            args=ow.root_owned_command(Path('/private payload'),['sh','/fixed/sdk/ipkg-build','/private payload','/out'])
+            self.assertEqual(args[:5],['fakeroot','-l','/fixed/libfakeroot.so','sh','-ec'])
+            self.assertIn('chown -hR 0:0 "$1"',args[5])
+            self.assertEqual(args[7],'/private payload')
+
+
+class GuestProtocolRegressionTests(unittest.TestCase):
+    def test_ssh_warning_is_not_part_of_version_or_json_stdout(self):
+        import polaris_openwrt_guest as guest
+        result=subprocess.CompletedProcess([],0,stdout=b'sing-box version 1.15.0-alpha.12\n',stderr=b'Warning: Permanently added fixture host\n')
+        with patch.object(guest.subprocess,'run',return_value=result) as run:
+            actual=guest.ssh_command(['ssh','private-fixture'],'sing-box version')
+        self.assertEqual(guest.checked_stdout(actual,'version').splitlines()[0],b'sing-box version 1.15.0-alpha.12')
+        self.assertEqual(run.call_args.kwargs['stderr'],subprocess.PIPE)
+        self.assertTrue(run.call_args.args[0][-1].startswith('set -eu; '))
+    def test_fail_fast_shell_cannot_hide_earlier_owner_or_ca_failure(self):
+        result=subprocess.run(['sh','-c','set -eu; false; printf masked-success'],capture_output=True)
+        self.assertNotEqual(result.returncode,0);self.assertEqual(result.stdout,b'')
+    def test_actual_old_prerm_new_preinst_postinst_order_restores_active_service(self):
+        import shlex
+        with tempfile.TemporaryDirectory(prefix='polaris-upgrade-order-') as directory:
+            root=Path(directory);(root/'etc/config').mkdir(parents=True);(root/'etc/sing-box').mkdir()
+            (root/'etc/config/sing-box').write_text('user enabled configuration');(root/'etc/sing-box/config.json').write_text('user JSON')
+            state=root/'running';state.touch();calls=root/'calls';service=root/'service'
+            service.write_text('#!/bin/sh\ncase "$1" in\n running) test -f '+shlex.quote(str(state))+';;\n stop) printf "stop\n" >> '+shlex.quote(str(calls))+'; rm -f '+shlex.quote(str(state))+';;\n start) printf "start\n" >> '+shlex.quote(str(calls))+'; touch '+shlex.quote(str(state))+';;\nesac\n');service.chmod(0o755)
+            for name,args in [('prerm',['upgrade']),('preinst',['upgrade']),('postinst',['configure'])]:
+                body=(REPO/'release/openwrt'/name).read_text().replace('/etc/init.d/sing-box',str(service)).replace('$root/etc/',str(root)+'/etc/')
+                script=root/name;script.write_text(body)
+                subprocess.run(['sh',script,*args],env=dict(os.environ,IPKG_INSTROOT=''),check=True)
+            self.assertTrue(state.exists());self.assertEqual(calls.read_text().splitlines(),['stop','start'])
+            self.assertEqual((root/'etc/config/sing-box').read_text(),'user enabled configuration')
+            self.assertEqual((root/'etc/sing-box/config.json').read_text(),'user JSON')
+
 if __name__=='__main__':unittest.main()

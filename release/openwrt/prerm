@@ -2,11 +2,13 @@
 set -eu
 # Offline image creation must never run the host service.
 root=${IPKG_INSTROOT:-}
+# opkg invokes old prerm before new preinst; leave active upgrades running
+# so new preinst can snapshot the state and own stop/restart.
+[ "${1:-}" != upgrade ] && [ "${PKG_UPGRADE:-0}" != 1 ] || exit 0
 if [ -z "$root" ]; then
 	/etc/init.d/sing-box stop || true
 fi
 # Upgrades retain the enabled flag and package-manager configuration semantics.
-[ "${1:-}" != upgrade ] && [ "${PKG_UPGRADE:-0}" != 1 ] || exit 0
 if [ -z "$root" ]; then /etc/init.d/sing-box disable || true; fi
 # Preserve even unmodified configuration: package managers may remove defaults.
 backup="$root/etc/polaris-box/retained-config"

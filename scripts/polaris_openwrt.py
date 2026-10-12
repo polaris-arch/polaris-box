@@ -131,6 +131,49 @@ def payload(repo, config, core, destination, source_reference):
     return {str(p.relative_to(destination)): {**file_info(p), 'mode': p.stat().st_mode & 0o777}
             for p in sorted(destination.rglob('*')) if p.is_file()}
 
+def fakeroot_library():
+    # The SDK APK wrapper uses its own loader --library-path. An absolute
+    # preload survives that wrapper instead of silently losing fakeroot.
+    libraries=list(Path('/usr/lib').glob('*/libfakeroot/libfakeroot-sysv.so'))
+    require(len(libraries)==1,'exact Ubuntu packaging fakeroot library required')
+    return libraries[0].resolve()
+
+def root_owned_command(root,command):
+    require(shutil.which('fakeroot'), 'explicit fakeroot packaging tool required')
+    # Only virtual ownership is changed, in this bounded staging tree. argv is
+    # passed without shell interpolation; symlink targets are never followed.
+    return ['fakeroot','-l',str(fakeroot_library()),'sh','-ec','chown -hR 0:0 "$1"; shift; exec "$@"',
+            'polaris-root-owned-archive',str(root),*[str(x) for x in command]]
+
+def archive_ownership(path,form,apk=None):
+    owners={}
+    if form=='ipk':
+        with tarfile.open(path,'r:gz') as outer:
+            for member in outer:
+                require(member.uid==0 and member.gid==0,'IPK outer member is not root:root')
+                owners['outer/'+member.name]={'uid':member.uid,'gid':member.gid}
+                if member.name.removeprefix('./') in ['control.tar.gz','data.tar.gz']:
+                    require(member.isfile(),'regular IPK inner archive required')
+                    stream=outer.extractfile(member)
+                    with tarfile.open(fileobj=stream,mode='r|gz') as inner:
+                        for entry in inner:
+                            require(entry.uid==0 and entry.gid==0,'IPK payload/control member is not root:root: '+entry.name)
+                            owners[member.name+'/'+entry.name]={'uid':entry.uid,'gid':entry.gid,'mode':entry.mode}
+    else:
+        dump=json.loads(run([apk,'adbdump','--format','json',path]))
+        require(isinstance(dump.get('paths'),list) and dump['paths'],'complete APK path metadata required')
+        for directory in dump['paths']:
+            items=[(directory.get('name',''),directory)]
+            items += [(directory.get('name','')+'/'+item['name'],item) for item in directory.get('files',[])]
+            for name,item in items:
+                acl=item.get('acl',{})
+                require(acl.get('user') in ['root','0'] and acl.get('group') in ['root','0'],
+                        'APK directory/file is not explicit root:root: '+name)
+                require(name not in owners,'duplicate APK ownership path')
+                owners[name]={'uid':0,'gid':0,'user':acl['user'],'group':acl['group'],'mode':acl['mode']}
+    require(owners,'package ownership inventory missing')
+    return {'policy':'all archived payload/control filesystem entries root:root (0:0)', 'members':owners}
+
 def package(repo, config, core, architecture, form, sdk, work, output, source_reference):
     require(architecture in ARCHITECTURES and form in ('apk', 'ipk'), 'unsupported package target')
     require(not output.exists(), 'preserve existing package')
@@ -152,6 +195,7 @@ def package(repo, config, core, architecture, form, sdk, work, output, source_re
             shutil.copyfile(repo / 'release/openwrt' / name, control / name);(control / name).chmod(0o755)
         generated = work / (architecture + '-ipk-generated');generated.mkdir()
         command = ['sh', sdkroot / 'scripts/ipkg-build', root, generated]
+        command=root_owned_command(root,command)
         log = run(command, env=env)
         files = list(generated.glob('*.ipk'));require(len(files) == 1, 'IPK builder inventory differs')
         shutil.copyfile(files[0], output)
@@ -162,8 +206,8 @@ def package(repo, config, core, architecture, form, sdk, work, output, source_re
             f'{name} {sha((root / name.lstrip("/")).read_bytes())}\n' for name in config['package']['configs']))
         (metadata / 'polaris-box.list').write_text(''.join('/' + name + '\n' for name in sorted(inventory)))
         owner_root = work / (architecture + '-apk-owners');(owner_root / 'etc').mkdir(parents=True)
-        (owner_root / 'etc/passwd').write_text(f'root:x:{os.getuid()}:{os.getgid()}:root:/root:/bin/false\n')
-        (owner_root / 'etc/group').write_text(f'root:x:{os.getgid()}:\n')
+        (owner_root / 'etc/passwd').write_text('root:x:0:0:root:/root:/bin/false\n')
+        (owner_root / 'etc/group').write_text('root:x:0:\n')
         command = [sdkroot / 'staging_dir/host/bin/apk', '--root', owner_root, 'mkpkg',
             '--info', 'name:polaris-box', '--info', 'version:' + version,
             '--info', 'description:Polaris-box musl static proxy platform', '--info', 'arch:' + architecture,
@@ -177,10 +221,12 @@ def package(repo, config, core, architecture, form, sdk, work, output, source_re
             '--script', 'pre-deinstall:' + str(repo / 'release/openwrt/prerm'),
             '--script', 'post-deinstall:' + str(repo / 'release/openwrt/postrm'),
             '--files', root, '--output', output]
+        command=root_owned_command(root,command)
         log = run(command, env=env)
     (work / (architecture + '-' + form + '-packager.log')).write_text(log)
     return {'architecture': architecture, 'format': form, 'packageVersion': version,
             'package': file_info(output), 'core': file_info(core), 'payloadInventory': inventory,
+            'archiveOwnership':archive_ownership(output,form,sdkroot/'staging_dir/host/bin/apk' if form=='apk' else None),
             'command': [str(x) for x in command], 'sdk': sdk, 'dependencies': deps,
             'conflictPolicy': 'sing-box cannot coexist; back up configuration and remove it before explicit migration',
             'autostartOnInstall': False, 'signatureTrustValidated': False,
@@ -377,6 +423,11 @@ def validate_assembled_openwrt(repo, expected, tree, inputs, guests, output, run
             require(record['package']['name'] == name and record['core'] == row['core'], 'package/core identity differs')
             package_file=path.parent/'packages'/name
             require(file_info(package_file) == record['package'] and record['payloadInventory']['usr/bin/sing-box']['sha256'] == row['core']['sha256'], 'actual package/core bytes differ')
+            ownership=record.get('archiveOwnership',{}).get('members',{})
+            require(ownership and all(entry.get('uid')==0 and entry.get('gid')==0 for entry in ownership.values()),
+                    'actual package root ownership evidence missing/different')
+            if record['format']=='ipk':
+                require(archive_ownership(package_file,'ipk')==record['archiveOwnership'],'actual IPK ownership differs')
             guest=next(g for g in guest_rows if (g['architecture'],g['format'])==(row['architecture'],record['format']))
             require(guest['schema'] == 'polaris-openwrt-guest-receipt-v1' and guest['sourceCommit'] == expected
                 and guest['sourceTree'] == tree and guest['workflowCommit'] == expected
@@ -408,14 +459,16 @@ def private_guest_fixtures(repo, config, core, architecture, sdk, apk_sdk, outpu
         if form=='ipk':
             control=root/'CONTROL';control.mkdir();(control/'control').write_text('Package: sing-box\nVersion: 0.0.1-1\nArchitecture: '+architecture+'\nMaintainer: fixture\nDescription: private package conflict fixture\n')
             generated=output/'conflict-generated';generated.mkdir()
-            run(['sh',Path(sdk['root'])/'scripts/ipkg-build',root,generated],env=dict(os.environ,SOURCE_DATE_EPOCH='0'))
+            run(root_owned_command(root,['sh',Path(sdk['root'])/'scripts/ipkg-build',root,generated]),env=dict(os.environ,SOURCE_DATE_EPOCH='0'))
             files=list(generated.glob('*.ipk'));require(len(files)==1,'private conflict inventory differs');shutil.copyfile(files[0],destination)
         else:
             owners=output/('conflict-owners-'+form);(owners/'etc').mkdir(parents=True)
-            (owners/'etc/passwd').write_text(f'root:x:{os.getuid()}:{os.getgid()}:root:/root:/bin/false\n');(owners/'etc/group').write_text(f'root:x:{os.getgid()}:\n')
-            run([Path(apk_sdk['root'])/'staging_dir/host/bin/apk','--root',owners,'mkpkg',
+            (owners/'etc/passwd').write_text('root:x:0:0:root:/root:/bin/false\n');(owners/'etc/group').write_text('root:x:0:\n')
+            command=[Path(apk_sdk['root'])/'staging_dir/host/bin/apk','--root',owners,'mkpkg',
                 '--info','name:sing-box','--info','version:0.0.1-r1','--info','arch:'+architecture,
-                '--info','description:private package conflict fixture','--info','license:GPL-3.0-or-later','--files',root,'--output',destination])
+                '--info','description:private package conflict fixture','--info','license:GPL-3.0-or-later','--files',root,'--output',destination]
+            run(root_owned_command(root,command))
+        archive_ownership(destination,form,Path(apk_sdk['root'])/'staging_dir/host/bin/apk' if form=='apk' else None)
         records['conflict-'+form]=file_info(destination)
     return records
 

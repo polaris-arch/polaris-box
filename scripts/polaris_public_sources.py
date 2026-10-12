@@ -88,11 +88,7 @@ def verify_public(value, work):
         records.append({'role': role, 'url': url, 'commit': obj['sha'], 'tree': obj['tree']['sha'],
                         'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'scope': 'Git identity; full engine source availability is separately reviewed'})
     for role in ['driver', 'engine']:
-        records.append(verify_git_source(role, value[role], work))
-    for row in value['naiveArchiveRestoration']:
-        path = work / 'restored-source-file'
-        records.append({'role': 'engine-gitlink-restoration', **fetch(row, path)})
-        path.unlink()
+        records.append(verify_git_source(role, value[role], work, value['naiveArchiveRestoration'] if role=='engine' else []))
     tool = value['openwrtToolchainCorrespondingSources']
     for role in ['gcc', 'musl']:
         path=work/(role+'-source');records.append({'role':role,**fetch(tool[role],path)});path.unlink()
@@ -102,7 +98,7 @@ def verify_public(value, work):
             'recordSha256': hashlib.sha256(encode(records)).hexdigest(),
             'scope': 'actual complete module ZIP union and Go distribution full bytes; complete fixed driver/engine Git source blobs with restored omissions; compiler source access and independent applicability remain explicit gates'}
 
-def verify_git_source(role, row, work):
+def verify_git_source(role, row, work, restorations=None):
     """Anonymous full archive bytes checked against exact public Git blob identities."""
     prefix = 'https://api.github.com/repos/' + row['repository']
     def get(url):
@@ -117,7 +113,12 @@ def verify_git_source(role, row, work):
         shutil.copyfileobj(response, output)
     record = {'role': role, 'url': url, **file_info(path), 'tree': row['tree'], 'commit': row['commit']}
     import tarfile
-    verified = set()
+    verified = set();export_restorations=[]
+    pins={entry['path']:entry for entry in (restorations or [])}
+    require(len(pins)==len(restorations or []),'duplicate source export restoration path')
+    require(not pins or role=='engine' and row['commit']=='be1be963131154ba82761a7ed85ba426b2027319', 'restoration only for fixed engine')
+    for name,pin in pins.items():
+        require(name in blobs and pin['gitBlob']==blobs[name]['sha'] and pin['url']=='https://raw.githubusercontent.com/'+row['repository']+'/'+row['commit']+'/'+name, 'restoration not bound to fixed source Git tree')
     with tarfile.open(path, 'r:gz') as reader:
         for member in reader:
             if member.isdir():continue
@@ -125,19 +126,45 @@ def verify_git_source(role, row, work):
             require(len(parts) == 2 and parts[1] not in verified, 'unsafe/duplicate Git source member')
             name = parts[1];require(name in blobs, 'source archive contains foreign blob')
             raw = reader.extractfile(member).read() if member.isfile() else member.linkname.encode() if member.issym() else None
-            require(raw is not None and hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
-                    == blobs[name]['sha'], 'source archive Git blob mismatch: ' + name)
+            require(raw is not None,'nonregular source archive member')
+            def retrieve(pin):
+                target=work/'source-export-restoration'
+                seen=fetch(pin,target);data=target.read_bytes();target.unlink();return data,seen
+            resolved,observation=resolve_exported_blob(row,name,raw,blobs[name]['sha'],pins.get(name),retrieve)
+            if observation:export_restorations.append(observation)
             verified.add(name)
     missing = set(blobs) - verified
     # Github archive export-ignore omissions are available from the exact Git commit.
     for name in sorted(missing):
-        raw = get('https://raw.githubusercontent.com/' + row['repository'] + '/' + row['commit'] + '/' + name)
-        require(hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() == blobs[name]['sha'],
-                'missing archive source blob restoration differs')
+        if name in pins:
+            target=work/'source-export-restoration';seen=fetch(pins[name],target);raw=target.read_bytes();target.unlink()
+            require(git_blob(raw)==blobs[name]['sha'],'missing pinned source restoration differs')
+            export_restorations.append({'path':name,'reason':'archive omission','source':seen,'gitBlob':blobs[name]['sha']})
+        else:
+            raw = get('https://raw.githubusercontent.com/' + row['repository'] + '/' + row['commit'] + '/' + name)
+            require(git_blob(raw)==blobs[name]['sha'],'missing archive source blob restoration differs')
         verified.add(name)
-    record.update(verifiedBlobs=len(verified), restoredOmissions=sorted(missing), gitlinks=gitlinks,
+    record.update(verifiedBlobs=len(verified), restoredOmissions=sorted(missing), exportRestoration=export_restorations, gitlinks=gitlinks,
                   anonymousFullGetVerified=True, exactCompleteGitSourceVerified=True)
     if role == 'driver':
         require(gitlinks.get(row['submodule']['path']) == row['submodule']['commit'], 'driver engine Git link differs')
     path.unlink()
     return record
+
+def git_blob(raw):
+    return hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+
+def resolve_exported_blob(row,name,archive_bytes,expected_blob,pin,retrieve):
+    """Bound CRLF/export substitution happens before per-member Git verification."""
+    actual=git_blob(archive_bytes)
+    if actual==expected_blob:
+        if pin:require(len(archive_bytes)==pin['bytes'] and hashlib.sha256(archive_bytes).hexdigest()==pin['sha256'] and pin['gitBlob']==expected_blob,'matching source export pin differs')
+        return archive_bytes,None
+    require(pin is not None and row['commit']=='be1be963131154ba82761a7ed85ba426b2027319'
+        and pin['path']==name and pin['gitBlob']==expected_blob,'unlisted archive Git blob mismatch: '+name)
+    raw,seen=retrieve(pin)
+    require(len(raw)==pin['bytes'] and hashlib.sha256(raw).hexdigest()==pin['sha256'] and git_blob(raw)==expected_blob,
+        'fixed raw source export restoration differs')
+    return raw,{'path':name,'reason':'known existing archive CRLF/export difference',
+        'archiveBytes':len(archive_bytes),'archiveSha256':hashlib.sha256(archive_bytes).hexdigest(),
+        'archiveGitBlob':actual,'gitBlob':expected_blob,'source':seen}

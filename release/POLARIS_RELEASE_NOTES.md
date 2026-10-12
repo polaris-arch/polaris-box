@@ -1,7 +1,7 @@
 ## Features
 
 - Add OpenWrt `x86_64` and `aarch64_generic` packages: `.ipk` for 24.10/opkg and `.apk` for 25.12/apk3.
-- Include Naive/Cronet and gVisor through the fixed musl static library. No separate Cronet/OpenSSL library or user build is required.
+- Statically link the fixed musl Cronet library for Naive; include the Go gVisor stack through the preserved `with_gvisor` build tag. No separate Cronet/OpenSSL library or user build is required.
 - Preserve six desktop CLI archives, with Linux/Windows Cronet libraries in the same archive and static integration on macOS.
 
 ## Fixes and compatibility

@@ -7,6 +7,8 @@ mobile acceptance, signing assertion or automatic publication from build results
 import argparse
 import hashlib
 import json
+import re
+import urllib.parse
 from pathlib import Path
 import shutil
 import subprocess
@@ -47,7 +49,7 @@ def tag_sha(data):
     return hashlib.sha1(b'tag ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 
 
-def prepare(repo, expected, inputs, index_sha, review_evidence, review_sha, output, epoch, name, email):
+def prepare(repo, expected, inputs, index_sha, review_evidence, review_sha, output, epoch, name, email, app_contract_evidence=None, app_contract_sha=None):
     config, tree = frozen_source(repo, expected)
     require(not output.exists() and not output.resolve().is_relative_to(repo.resolve()), 'fresh external preparation required')
     raw = (inputs / 'polaris-box-assets.json').read_bytes()
@@ -66,7 +68,17 @@ def prepare(repo, expected, inputs, index_sha, review_evidence, review_sha, outp
     require(expected in review_text and index_sha in review_text,
             'actual review evidence must bind this source and produced index')
     review = {'sha256': review_sha, 'bytes': len(review_bytes), 'text': review_text,
-              'scope': 'six desktop CLI archives + four OpenWrt packages; whole-batch source/license/layout/actual artifact review'}
+              'scope': 'parent source/license/actual CLI-package artifact review; does not sign App owner acceptance'}
+    app_review = {'status':'pending','scope':'App owner contract signoff; not covered by parent source/license review'}
+    if app_contract_evidence is not None or app_contract_sha is not None:
+        require(app_contract_evidence is not None and app_contract_sha is not None,'both actual App contract evidence and hash required')
+        app_raw=app_contract_evidence.read_bytes()
+        require(sha(app_raw)==app_contract_sha,'App owner evidence byte hash differs')
+        app_text=app_raw.decode('utf-8')
+        require(expected in app_text and config['version'] in app_text and config['tag'] in app_text,
+                'App owner contract evidence not bound to this source/version/tag')
+        app_review={'status':'recorded-App-owner-contract-review','scope':'contract only; actual release load/carrier remains pending',
+                    'evidenceSha256':app_contract_sha,'bytes':len(app_raw),'text':app_text}
     require(len(index.get('openwrtPlatforms', [])) == 2
             and {r['architecture'] for r in index['openwrtPlatforms']} == {'x86_64', 'aarch64_generic'}, 'actual two OpenWrt rows required')
     require(index['sourceDelivery']['method'] == 'fixed-public-source-references'
@@ -100,8 +112,10 @@ def prepare(repo, expected, inputs, index_sha, review_evidence, review_sha, outp
     index['tagObject'] = object_sha
     index['tagObjectState'] = 'prepared-expectation; remote tag creation and verification pending'
     index['publicationEligible'] = True
-    for gate in APPROVAL_GATES:
-        index['gates'][gate] = {'status': 'recorded-parent-whole-batch-review', 'evidenceSha256': review_sha}
+    for gate in ['independentSourceReview','licenseSourceReview']:
+        index['gates'][gate] = {'status': 'recorded-parent-source-license-artifact-review', 'evidenceSha256': review_sha}
+    index['gates']['AppOwnerSignoff']=app_review
+    index['sourceDelivery']['reviewState']={'status':'recorded-parent-corresponding-source-review','evidenceSha256':review_sha}
     # Public download and final App/device/mobile proof remain pending.
     (output / 'polaris-box-assets.json').write_bytes(encode(index))
     names = set(expected_archives) | {'polaris-box-assets.json'}
@@ -112,7 +126,7 @@ def prepare(repo, expected, inputs, index_sha, review_evidence, review_sha, outp
         'tagObject': object_sha, 'tagObjectBytesHex': tag_bytes.hex(), 'assets': assets,
         'title': config['version'],
         'notes': (repo / 'release/POLARIS_RELEASE_NOTES.md').read_text().replace('<SOURCE_COMMIT>', expected),
-        'reviewEvidence': review, 'reviewEvidenceSha256': review_sha,
+        'reviewEvidence': review, 'reviewEvidenceSha256': review_sha,'AppOwnerContractReview':app_review,
         'reviewedNativeIndexSha256': index_sha, 'nativeRun': index['workflowRun'], 'nativeAttempt': index['workflowAttempt'],
         'consumerKeys': {row['target']: row['consumerKey'] for row in config['desktop'] if row['consumerKey']},
         'publicUploadPerformed': False, 'tagCreated': False, 'mobileAcceptance': False, 'AppConsumerAcceptance': 'pending'}
@@ -154,30 +168,46 @@ def remote_tag(repo, m):
     return True
 
 
-def validate_release(release, m, complete, release_id=None):
-    if release_id is not None:
-        require(release['id'] == release_id, 'inspected release ID differs')
-    require(release['tag_name'] == m['tag'] and release['prerelease'] is True
-            and release['name'] == m['title'] and release['body'] == m['notes'], 'release identity/notes differ')
-    expected = {a['name']: a for a in m['assets']}
-    actual = {a['name']: a for a in release['assets']}
-    require(len(actual) == len(release['assets']) and set(actual) <= set(expected), 'unexpected/duplicate release assets; preserve')
-    if complete:
-        require(set(actual) == set(expected), 'incomplete release assets')
-    require(len({a['id'] for a in actual.values()}) == len(actual), 'duplicate actual asset IDs')
-    for name, a in actual.items():
-        url = 'https://github.com/' + REPOSITORY + '/releases/download/' + m['tag'] + '/' + name
-        require(type(a['id']) is int and a['id'] > 0 and a['browser_download_url'] == url, 'actual asset ID/URL differs')
-        require(a['size'] == expected[name]['bytes'] and a.get('digest') == 'sha256:' + expected[name]['sha256'],
-                'existing remote asset differs; never overwrite: ' + name)
-    return set(expected) - set(actual)
+def validate_release(release, m, complete, release_id=None, draft_url_tag=None):
+    if release_id is not None:require(release['id']==release_id,'inspected release ID differs')
+    require(type(release['id']) is int and release['id']>0 and type(release['draft']) is bool,'actual release identity required')
+    draft=release['draft']
+    temporary=lambda value: isinstance(value,str) and re.fullmatch(r'untagged-[0-9a-f]{8,64}',value) is not None
+    require((release['tag_name']==m['tag'] or draft and temporary(release['tag_name']))
+            and release['prerelease'] is True and release['name']==m['title'] and release['body']==m['notes'],
+            'release identity/notes differ')
+    expected={a['name']:a for a in m['assets']};actual={a['name']:a for a in release['assets']}
+    require(len(actual)==len(release['assets']) and set(actual)<=set(expected),'unexpected/duplicate release assets; preserve')
+    if complete:require(set(actual)==set(expected),'incomplete release assets')
+    require(len({a['id'] for a in actual.values()})==len(actual),'duplicate actual asset IDs')
+    temporary_paths=set()
+    for name,a in actual.items():
+        url=a['browser_download_url'];parts=urllib.parse.urlsplit(url)
+        prefix='/'+REPOSITORY+'/releases/download/'
+        require(parts.scheme=='https' and parts.netloc=='github.com' and not parts.query and not parts.fragment
+                and parts.path.startswith(prefix),'actual asset URL escapes repository')
+        relative=parts.path[len(prefix):];segments=relative.split('/')
+        require(len(segments)==2 and segments[1]==name,'actual asset URL name differs')
+        observed_tag=segments[0]
+        require(observed_tag==m['tag'] or draft and temporary(observed_tag),'noncanonical public or unbounded draft URL')
+        if observed_tag!=m['tag']:temporary_paths.add(observed_tag)
+        require(type(a['id']) is int and a['id']>0,'actual asset ID differs')
+        require(a['size']==expected[name]['bytes'] and a.get('digest')=='sha256:'+expected[name]['sha256'],
+                'existing remote asset differs; never overwrite: '+name)
+    require(len(temporary_paths)<=1,'mixed temporary draft URL identities')
+    if draft_url_tag is not None:
+        require(not temporary_paths or temporary_paths=={draft_url_tag},'observed draft URL identity changed')
+    if temporary(release['tag_name']) and temporary_paths:
+        require(temporary_paths=={release['tag_name']},'draft URL/tag identity differs')
+    return set(expected)-set(actual)
 
 
-def matching_releases(endpoint, tag):
+def matching_releases(endpoint, tag, manifest=None):
     matches, page = [], 1
     while True:
         rows = api(endpoint + f'?per_page=100&page={page}')
-        matches += [r for r in rows if r['tag_name'] == tag]
+        matches += [r for r in rows if r['tag_name']==tag or manifest and r.get('draft') is True
+                    and r.get('name')==manifest['title'] and r.get('body')==manifest['notes']]
         if len(rows) < 100:
             return matches
         page += 1
@@ -217,7 +247,7 @@ def execute_frozen(args, m, snapshot):
     endpoint = 'repos/' + REPOSITORY + '/releases'
     tagged = remote_tag(args.repo, m)
     if args.action == 'stage-draft':
-        require(not tagged and not matching_releases(endpoint, m['tag']), 'existing tag/release; preserve and inspect')
+        require(not tagged and not matching_releases(endpoint, m['tag'],m), 'existing tag/release; preserve and inspect')
         require(command('git', '-C', args.repo, 'remote', 'get-url', '--push', 'polaris')
                 == 'https://github.com/' + REPOSITORY + '.git', 'fork push remote differs')
         actual = command('git', '-C', args.repo, 'mktag', data=bytes.fromhex(m['tagObjectBytesHex']))
@@ -226,29 +256,35 @@ def execute_frozen(args, m, snapshot):
         command('git', '-C', args.repo, 'push', 'polaris', actual + ':refs/tags/' + m['tag'])
         require(remote_tag(args.repo, m), 'new remote tag not observed')
         release = api(endpoint, {'tag_name': m['tag'], 'name': m['title'], 'body': m['notes'],
-                                'draft': True, 'prerelease': True, 'make_latest': 'false'})
+                                'draft': True, 'prerelease': True, 'make_latest': 'false','target_commitish':m['sourceCommit']})
     elif args.action == 'resume-tagged':
-        require(tagged and not matching_releases(endpoint, m['tag']), 'exact tag and absent release required')
+        require(tagged and not matching_releases(endpoint, m['tag'],m), 'exact tag and absent release required')
         release = api(endpoint, {'tag_name': m['tag'], 'name': m['title'], 'body': m['notes'],
-                                'draft': True, 'prerelease': True, 'make_latest': 'false'})
+                                'draft': True, 'prerelease': True, 'make_latest': 'false','target_commitish':m['sourceCommit']})
     else:
         require(tagged and args.release_id is not None, 'exact remote tag and inspected release ID required')
         release = api(endpoint + '/' + str(args.release_id))
     if args.action in ('stage-draft', 'resume-tagged', 'resume-draft'):
         require(release['draft'] is True, 'only an exact inspected draft may receive missing assets')
         missing = validate_release(release, m, False, args.release_id)
+        observed_draft_tags={a['browser_download_url'].rsplit('/',2)[-2] for a in release['assets']
+                             if a['browser_download_url'].rsplit('/',2)[-2]!=m['tag']}
+        observed_draft_tag=next(iter(observed_draft_tags),None)
         for name in sorted(missing):
             command('gh', 'release', 'upload', m['tag'], snapshot / name, '--repo', REPOSITORY)
         release = api(endpoint + '/' + str(release['id']))
         require(release['draft'] is True, 'draft changed during staging')
-        validate_release(release, m, True, release['id'])
-        return {'phase': 'draft-staged', 'releaseId': release['id'], 'tagObject': m['tagObject'], 'public': False}
+        validate_release(release, m, True, release['id'],observed_draft_tag)
+        observed_draft_tags={a['browser_download_url'].rsplit('/',2)[-2] for a in release['assets']
+                             if a['browser_download_url'].rsplit('/',2)[-2]!=m['tag']}
+        return {'phase': 'draft-staged', 'releaseId': release['id'], 'tagObject': m['tagObject'],
+                'observedDraftURLTag':next(iter(observed_draft_tags),None),'public': False}
     validate_release(release, m, True, args.release_id)
     if args.action == 'publish':
         require(release['draft'] is True, 'publish requires the exact staged draft')
         with tempfile.TemporaryDirectory(prefix='polaris-publish-patch-') as directory:
             payload = Path(directory) / 'publish.json'
-            payload.write_bytes(encode({'draft': False, 'prerelease': True, 'make_latest': 'false'}))
+            payload.write_bytes(encode({'tag_name':m['tag'],'target_commitish':m['sourceCommit'],'draft': False, 'prerelease': True, 'make_latest': 'false'}))
             release = json.loads(command('gh', 'api', endpoint + '/' + str(args.release_id), '--method', 'PATCH', '--input', payload))
     require(release['draft'] is False, 'actual public release required')
     validate_release(release, m, True, args.release_id)
@@ -299,6 +335,8 @@ def main():
     parser.add_argument('--index-sha256')
     parser.add_argument('--review-evidence', type=Path)
     parser.add_argument('--review-evidence-sha256')
+    parser.add_argument('--app-contract-evidence',type=Path)
+    parser.add_argument('--app-contract-evidence-sha256')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--tag-epoch')
     parser.add_argument('--tagger-name')
@@ -308,7 +346,8 @@ def main():
         require(all([args.inputs, args.index_sha256, args.review_evidence, args.review_evidence_sha256,
                      args.tag_epoch, args.tagger_name, args.tagger_email]), 'preparation arguments missing')
         result = prepare(args.repo, args.expected_head, args.inputs, args.index_sha256,
-                         args.review_evidence, args.review_evidence_sha256, args.output, args.tag_epoch, args.tagger_name, args.tagger_email)
+                         args.review_evidence, args.review_evidence_sha256, args.output, args.tag_epoch, args.tagger_name, args.tagger_email,
+                         args.app_contract_evidence,args.app_contract_evidence_sha256)
     else:
         require(args.manifest and args.manifest_sha256, 'frozen manifest and digest required')
         require(not args.output.exists() and not args.output.resolve().is_relative_to(args.repo.resolve()), 'fresh external receipt required')

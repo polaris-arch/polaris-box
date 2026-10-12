@@ -38,4 +38,22 @@ class PublicSourceTests(unittest.TestCase):
                 with patch.object(sources.urllib.request,'urlopen',return_value=io.BytesIO(b'abc')),self.assertRaises(ValueError):
                     sources.fetch({'url':'https://example.invalid/pinned-source',**expected},path)
                 self.assertTrue(path.exists())
+
+class ExportRestorationRegressionTests(unittest.TestCase):
+    def case(self):
+        raw=b'<project>\nLF source\n</project>\n';archive=raw.replace(b'\n',b'\r\n');name='src/fullbench.vcproj'
+        pin={'path':name,'gitBlob':sources.git_blob(raw),'bytes':len(raw),'sha256':sources.hashlib.sha256(raw).hexdigest()}
+        return raw,archive,name,pin
+    def test_existing_crlf_export_is_restored_before_git_blob_check(self):
+        raw,archive,name,pin=self.case();result,record=sources.resolve_exported_blob({'commit':'be1be963131154ba82761a7ed85ba426b2027319'},name,archive,pin['gitBlob'],pin,lambda _: (raw,{'bytes':len(raw),'sha256':pin['sha256']}))
+        self.assertEqual(result,raw);self.assertEqual(record['archiveBytes'],len(archive));self.assertNotEqual(record['archiveGitBlob'],pin['gitBlob'])
+    def test_unlisted_export_wrong_git_blob_or_raw_pin_is_rejected(self):
+        raw,archive,name,pin=self.case()
+        for mutated in [None,{**pin,'gitBlob':'0'*40},{**pin,'sha256':'0'*64}]:
+            with self.subTest(pin=mutated),self.assertRaises(ValueError):
+                sources.resolve_exported_blob({'commit':'be1be963131154ba82761a7ed85ba426b2027319'},name,archive,pin['gitBlob'],mutated,lambda _: (raw,{}))
+    def test_exact_export_is_not_mutated(self):
+        raw,archive,name,pin=self.case();result,record=sources.resolve_exported_blob({'commit':'be1be963131154ba82761a7ed85ba426b2027319'},name,raw,pin['gitBlob'],pin,lambda _:self.fail('no replacement needed'))
+        self.assertEqual(result,raw);self.assertIsNone(record)
+
 if __name__=='__main__':unittest.main()

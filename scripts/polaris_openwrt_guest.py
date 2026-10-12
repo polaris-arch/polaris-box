@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -27,6 +28,15 @@ def fetch(pin,path):
         while data:=source.read(1024*1024):output.write(data)
     require(file_info(path)['sha256']==pin['sha256'],'official guest image hash differs')
     return {'url':pin['url'],**file_info(path)}
+
+def ssh_command(ssh,command,data=None):
+    return subprocess.run([*ssh,'set -eu; '+command],input=data,
+                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=300)
+
+def checked_stdout(result,command,expected_exit=0):
+    require(result.returncode==expected_exit,'guest operation failed: '+command+'\n'
+        +result.stdout.decode(errors='replace')+'\n'+result.stderr.decode(errors='replace'))
+    return result.stdout
 
 def validate(repo,expected,architecture,form,inputs,output):
     verify_source(repo,expected);config=plan(repo)
@@ -72,10 +82,9 @@ def validate(repo,expected,architecture,form,inputs,output):
         'procd','caBundle','naiveTLSH2','wrongCARejected','gvisorTUN','staticNoSidecar','genericCPU']}
     event_log=(output/'guest-actions.log').open('w');vm_log=(output/'guest-console.log').open('wb');process=None
     def execute(command, data=None, expected_exit=0):
-        result=subprocess.run([*ssh,command],input=data,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
-        event_log.write('COMMAND '+command+'\n'+result.stdout.decode(errors='replace')+'\nEXIT '+str(result.returncode)+'\n');event_log.flush()
-        require(result.returncode==expected_exit,'guest operation failed: '+command+'\n'+result.stdout.decode(errors='replace'))
-        return result.stdout
+        result=ssh_command(ssh,command,data)
+        event_log.write('COMMAND '+command+'\nSTDOUT\n'+result.stdout.decode(errors='replace')+'\nSTDERR (SSH/remote diagnostics; not protocol stdout)\n'+result.stderr.decode(errors='replace')+'\nEXIT '+str(result.returncode)+'\n');event_log.flush()
+        return checked_stdout(result,command,expected_exit)
     def upload(path,name):execute('cat > /tmp/'+name,data=path.read_bytes())
     def manager(action,filename=None,allow_failure=False):
         suffix=' /tmp/'+filename if filename else ' polaris-box'
@@ -98,9 +107,25 @@ def validate(repo,expected,architecture,form,inputs,output):
         require(release.encode() in execute('cat /etc/openwrt_release'),'actual guest release differs')
         from datetime import datetime,timezone
         execute("date -u -s '"+datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')+"'")
-        execute('opkg update' if form=='ipk' else 'apk update')
+        repository_attempts=[]
+        # Bounded I/O preparation retries stay inside this one whole-batch run.
+        # Every failure is logged; no index/dependency checks are weakened.
+        for attempt in range(1,4):
+            try:
+                execute('opkg update' if form=='ipk' else 'apk update')
+                repository_attempts.append({'attempt':attempt,'status':'all required indexes available'});break
+            except ValueError as error:
+                repository_attempts.append({'attempt':attempt,'status':'preparation failed','error':str(error)})
+                (output/'REPOSITORY-PREPARATION.json').write_bytes(encode(repository_attempts))
+                if form!='apk' or attempt==3:raise
+                execute('date -u; ip route')
+                time.sleep(5*attempt)
+        (output/'REPOSITORY-PREPARATION.json').write_bytes(encode(repository_attempts))
         execute(('opkg install ' if form=='ipk' else 'apk add ')+' '.join(config['dependencies']))
         execute('test -s /etc/ssl/certs/ca-certificates.crt; test -c /dev/net/tun');checks['caBundle']=True
+        # Test-only controlled HTTP fixture from the same official guest feed.
+        execute('opkg install uhttpd' if form=='ipk' else 'apk add uhttpd')
+        http_fixture=execute('uhttpd -h 2>&1 || test -x /usr/sbin/uhttpd; sha256sum /usr/sbin/uhttpd').decode()
         for role,path in files.items():upload(path,role+'.'+form)
         manager('install','conflict.'+form)
         before=execute('sha256sum /usr/bin/sing-box')
@@ -112,6 +137,16 @@ def validate(repo,expected,architecture,form,inputs,output):
         initial=config_pins();manager('install','candidate.'+form)
         require(config_pins()==initial,'initial install overwrote pre-existing user configuration')
         execute('test "$(uci get sing-box.main.enabled)" = 0; test ! -e /etc/rc.d/S99sing-box')
+        expected_files=next(r for r in receipt['packages'] if r['format']==form)['payloadInventory']
+        installed_paths={Path('/'+name) for name in expected_files}
+        if form=='apk':
+            installed_paths.update(Path('/lib/apk/packages')/name for name in
+                ['polaris-box.conffiles','polaris-box.conffiles_static','polaris-box.list'])
+        # Check all installed files and their directories, including shared parents.
+        installed_paths.update(parent for path in list(installed_paths) for parent in path.parents)
+        owner_check='; '.join('test "$(stat -c %u:%g '+shlex.quote(str(path))+')" = 0:0'
+                              for path in sorted(installed_paths))
+        execute(owner_check)
         require(receipt['core']['sha256'].encode() in execute('sha256sum /usr/bin/sing-box'),'installed core differs')
         actual_version=execute('sing-box version').decode()
         require(actual_version.splitlines()[0]=='sing-box version '+config['version'],'installed version differs')
@@ -141,7 +176,14 @@ def validate(repo,expected,architecture,form,inputs,output):
             'address':['172.31.99.1/30'],'auto_route':False,'stack':'gvisor'}], 'outbounds':[{'type':'direct'}],
             'route':{'rules':[{'ip_cidr':['198.18.0.1/32'],'action':'route-options','override_address':'127.0.0.1','override_port':18081}]}}
         execute('cat > /etc/sing-box/config.json',data=json.dumps(tun_config).encode())
-        execute("mkdir -p /tmp/polaris-www; printf '%s' actual-gvisor-tun-response > /tmp/polaris-www/token; busybox httpd -f -p 127.0.0.1:18081 -h /tmp/polaris-www >/tmp/httpd.log 2>&1 &")
+        execute("mkdir -p /tmp/polaris-www; printf '%s' actual-gvisor-tun-response > /tmp/polaris-www/token; "
+                "uhttpd -f -p 127.0.0.1:18081 -h /tmp/polaris-www >/tmp/httpd.log 2>&1 & "
+                "http_pid=$!; printf '%s\\n' \"$http_pid\" > /tmp/polaris-http.pid; "
+                "for attempt in 1 2 3 4 5 6 7 8 9 10; do "
+                "if ! kill -0 \"$http_pid\"; then cat /tmp/httpd.log; exit 1; fi; "
+                "if response=$(wget -T 2 -qO- http://127.0.0.1:18081/token 2>/tmp/http-probe.log) "
+                "&& [ \"$response\" = actual-gvisor-tun-response ]; then exit 0; fi; sleep 1; done; "
+                "cat /tmp/httpd.log /tmp/http-probe.log; exit 1")
         execute('uci set sing-box.main.enabled=1; uci set sing-box.main.conffile=/etc/sing-box/config.json; uci commit sing-box; /etc/init.d/sing-box start')
         time.sleep(3)
         procd=json.loads(execute("ubus call service list '{\"name\":\"sing-box\"}'"))
@@ -152,7 +194,7 @@ def validate(repo,expected,architecture,form,inputs,output):
         (output/'procd-observation.json').write_bytes(encode(procd));(output/'cronet-observation.json').write_bytes(encode(smoke))
         record={'schema':'polaris-openwrt-guest-receipt-v1','status':'passed','sourceCommit':expected,'sourceTree':receipt['sourceTree'],
             'architecture':architecture,'format':form,'release':release,'package':package,'core':receipt['core'],'checks':checks,'actualVersionOutput':actual_version,
-            'guestInputs':observed,'qemu':{'command':[str(x) for x in args],'binary':file_info(qemu_path),'version':run([qemu_path,'--version']).splitlines()[0],
+            'repositoryPreparation':repository_attempts,'testOnlyHTTPFixture':{'source':'official same-release guest feed uhttpd','observation':http_fixture},'guestInputs':observed,'qemu':{'command':[str(x) for x in args],'binary':file_info(qemu_path),'version':run([qemu_path,'--version']).splitlines()[0],
                 'cpu':cpu,'memoryMiB':1536,'cpus':2,'network':'user-mode; SSH/proxy forwards bound only to127.0.0.1; no TAP/host routes'},
             'workflowCommit':os.environ['GITHUB_SHA'],'workflowRun':os.environ['GITHUB_RUN_ID'],'workflowAttempt':os.environ['GITHUB_RUN_ATTEMPT'],
             'scope':'actual isolated official OpenWrt guest kernel/package manager/procd/CA/Naive TLS-H2/gvisor TUN on measured generic CPU profile',

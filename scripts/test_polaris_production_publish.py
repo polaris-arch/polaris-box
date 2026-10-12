@@ -73,6 +73,8 @@ class ProductionPublicationTests(unittest.TestCase):
             index = json.loads((manifest.parent / 'polaris-box-assets.json').read_bytes())
             self.assertEqual(index['tagObject'], m['tagObject'])
             self.assertEqual(index['gates']['actualPublicDownloadConsumerAcceptance'], 'pending')
+            self.assertEqual(index['gates']['AppOwnerSignoff']['status'],'pending')
+            self.assertNotIn('App owner acceptance',index['gates']['independentSourceReview']['status'])
             self.assertFalse(m['tagCreated'])
             self.assertFalse(m['publicUploadPerformed'])
             self.assertFalse(m['mobileAcceptance'])
@@ -260,6 +262,8 @@ class ProductionPublicationTests(unittest.TestCase):
                 published = True
                 (manifest.parent / 'polaris-box-assets.json').write_bytes(b'changed-after-snapshot')
                 self.assertIn('PATCH', args)
+                payload=json.loads(Path(args[-1]).read_bytes())
+                self.assertEqual(payload['tag_name'],m['tag']);self.assertEqual(payload['target_commitish'],HEAD)
                 payload = json.loads(Path(args[-1]).read_bytes())
                 self.assertEqual(payload, {'draft': False, 'prerelease': True, 'make_latest': 'false'})
                 return json.dumps(self.release(m, draft=False))
@@ -312,6 +316,34 @@ class ProductionPublicationTests(unittest.TestCase):
                 self.assertEqual(len(publish.public_readback(m)), 12)
             with patch.object(publish.urllib.request, 'urlopen', return_value=io.BytesIO(b'changed')), self.assertRaises(ValueError):
                 publish.public_readback(m)
+
+    def test_bounded_draft_url_and_tag_drift_are_not_accepted_after_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest,m=self.prepare(Path(directory));draft=self.release(m);temp='untagged-b23d66d686ac1ee9af27'
+            for a in draft['assets']:a['browser_download_url']=a['browser_download_url'].replace(m['tag'],temp)
+            self.assertEqual(publish.validate_release(draft,m,True,19),set())
+            with self.assertRaisesRegex(ValueError,'observed draft URL identity changed'):
+                publish.validate_release(draft,m,True,19,'untagged-1234567890abcdef')
+            draft['tag_name']=temp
+            self.assertEqual(publish.validate_release(draft,m,True,19),set())
+            for bad in [temp+'?extra=1','untagged-other','https://evil.invalid/x']:
+                mutant=copy.deepcopy(draft);mutant['assets'][0]['browser_download_url']=mutant['assets'][0]['browser_download_url'].replace(temp,bad)
+                with self.assertRaises(ValueError):publish.validate_release(mutant,m,True,19)
+            mixed=copy.deepcopy(draft);mixed['assets'][0]['browser_download_url']=mixed['assets'][0]['browser_download_url'].replace(temp,'untagged-1234567890abcdef')
+            with self.assertRaises(ValueError):publish.validate_release(mixed,m,True,19)
+            draft['draft']=False
+            with self.assertRaises(ValueError):publish.validate_release(draft,m,True,19)
+    def test_app_owner_contract_evidence_is_separate_and_exactly_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);config,inputs,index_sha,review=self.inputs(base);app=base/'actual-app-record.txt'
+            app.write_text('Inert App-owner contract fixture '+HEAD+' '+config['version']+' '+config['tag'])
+            with patch.object(publish,'frozen_source',return_value=(config,TREE)):
+                publish.prepare(REPO,HEAD,inputs,index_sha,review,publish.sha(review.read_bytes()),base/'out',
+                    '1791720000','Fixture','fixture@example.invalid',app,publish.sha(app.read_bytes()))
+            index=json.loads((base/'out/polaris-box-assets.json').read_bytes())
+            self.assertEqual(index['gates']['AppOwnerSignoff']['status'],'recorded-App-owner-contract-review')
+            self.assertEqual(index['gates']['AppOwnerSignoff']['text'],app.read_text())
+            self.assertEqual(index['gates']['actualPublicDownloadConsumerAcceptance'],'pending')
 
 
 if __name__ == '__main__':unittest.main()

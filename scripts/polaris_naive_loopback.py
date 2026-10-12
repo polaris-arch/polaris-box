@@ -33,7 +33,7 @@ def main(core,output,runner=None,guest=None):
             subprocess.run([*guest['ssh'],'cat > /tmp/polaris-fixture-ca.pem'],input=cert,check=True)
             config['outbounds'][0]['tls']['certificate_path']='/tmp/polaris-fixture-ca.pem'
             subprocess.run([*guest['ssh'],'cat > /tmp/polaris-fixture-client.json'],input=json.dumps(config).encode(),check=True)
-            subprocess.run([*guest['ssh'],"/etc/init.d/sing-box stop; uci set sing-box.main.enabled=1; uci set sing-box.main.conffile=/tmp/polaris-fixture-client.json; uci commit sing-box; /etc/init.d/sing-box start"],check=True)
+            subprocess.run([*guest['ssh'],"set -eu; if /etc/init.d/sing-box running; then /etc/init.d/sing-box stop; fi; uci set sing-box.main.enabled=1; uci set sing-box.main.conffile=/tmp/polaris-fixture-client.json; uci commit sing-box; /etc/init.d/sing-box start"],check=True)
             for _ in range(200):
                 ready=subprocess.run([*guest['ssh'],"netstat -lnt | grep -q ':1080 '"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
                 if ready.returncode==0:return

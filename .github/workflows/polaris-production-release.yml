@@ -115,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y zstd qemu-user
+          sudo apt-get install -y zstd qemu-user fakeroot
       - name: Build actual version, verify patched source, native capabilities and final archive
         shell: bash
         env:
@@ -217,6 +217,7 @@ jobs:
           path: |
             ${{ runner.temp }}/openwrt-guest/guest-receipt.json
             ${{ runner.temp }}/openwrt-guest/GUEST-FAILURE.json
+            ${{ runner.temp }}/openwrt-guest/REPOSITORY-PREPARATION.json
             ${{ runner.temp }}/openwrt-guest/*.log
             ${{ runner.temp }}/openwrt-guest/*-observation.json
             ${{ runner.temp }}/openwrt-guest/naive-tls-h2/RECEIPT.json
