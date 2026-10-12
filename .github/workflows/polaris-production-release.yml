@@ -220,7 +220,7 @@ jobs:
             ${{ runner.temp }}/openwrt-guest/REPOSITORY-PREPARATION.json
             ${{ runner.temp }}/openwrt-guest/*.log
             ${{ runner.temp }}/openwrt-guest/*-observation.json
-            ${{ runner.temp }}/openwrt-guest/naive-tls-h2/RECEIPT.json
+            ${{ runner.temp }}/openwrt-guest/naive-tls-h2/*.json
             ${{ runner.temp }}/openwrt-guest/naive-tls-h2/*.log
             ${{ runner.temp }}/openwrt-guest/naive-tls-h2/*.crt
             ${{ runner.temp }}/openwrt-guest/naive-tls-h2/*-response.bin

@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import polaris_openwrt as ow
 
 REPO=Path(__file__).resolve().parents[1]
@@ -131,6 +131,51 @@ class PortableOwnerRegressionTests(unittest.TestCase):
     def test_missing_utility_and_incomplete_numeric_row_fail_closed(self):
         self.assertNotEqual(self.inspect('',127).returncode,0)
         self.assertNotEqual(self.inspect('incomplete').returncode,0)
+
+
+class NaiveNamespaceRegressionTests(unittest.TestCase):
+    def test_certificate_and_client_sni_use_same_nonlocalhost_private_name(self):
+        import polaris_naive_loopback as fixture
+        self.assertEqual(fixture.FIXTURE_SERVER_NAME,'polaris-naive.test')
+        self.assertNotEqual(fixture.FIXTURE_SERVER_NAME,'localhost')
+        for phase in ['wrong','trusted']:
+            config=fixture.client_config(Path('/inert'),phase,1080,443)
+            tls=config['outbounds'][0]['tls'];args=fixture.certificate_command(Path('/inert'),phase)
+            self.assertEqual(tls['server_name'],fixture.FIXTURE_SERVER_NAME)
+            self.assertIn('subjectAltName=DNS:'+tls['server_name'],args)
+            self.assertIn('/CN='+tls['server_name'],args)
+            self.assertNotIn('insecure',tls);self.assertFalse(config['outbounds'][0]['quic'])
+    def test_ready_pid_is_bound_to_exact_phase_config_not_old_listener(self):
+        import polaris_naive_loopback as fixture
+        state={'sing-box':{'instances':{'old':{'running':True,'pid':20,'command':['core','-c','/tmp/wrong.json']},
+            'new':{'running':True,'pid':21,'command':['core','-c','/tmp/trusted.json']},
+            'malformed':{'running':True,'pid':True,'command':'/tmp/trusted.json'}}}}
+        self.assertEqual(fixture.matching_phase_pids(state,'/tmp/trusted.json'),{21})
+        self.assertEqual(fixture.matching_phase_pids(state,'/tmp/missing.json'),set())
+    def test_matching_path_elsewhere_in_command_does_not_bind_config(self):
+        import polaris_naive_loopback as fixture
+        state={'sing-box':{'instances':{'other':{'running':True,'pid':21,'command':['core','--unrelated','/tmp/trusted.json']}}}}
+        self.assertEqual(fixture.matching_phase_pids(state,'/tmp/trusted.json'),set())
+    def test_listener_is_exact_numeric_port_and_rejects_other_ports(self):
+        import polaris_naive_loopback as fixture
+        self.assertTrue(fixture.tcp_listener(b'tcp 0 0 :::1080 :::* LISTEN\n',1080))
+        self.assertTrue(fixture.tcp_listener(b'tcp 0 0 0.0.0.0:1080 0.0.0.0:* LISTEN\n',1080))
+        self.assertFalse(fixture.tcp_listener(b'tcp 0 0 0.0.0.0:11080 0.0.0.0:* LISTEN\n',1080))
+        self.assertFalse(fixture.tcp_listener(b'utility failure\n',1080))
+    def test_cleanup_failure_does_not_leave_other_owned_processes_or_target(self):
+        import polaris_naive_loopback as fixture
+        first=Mock();first.poll.return_value=None;first.terminate.side_effect=OSError('fixture process failure')
+        second=Mock();second.poll.return_value=None
+        log=Mock();target=Mock()
+        self.assertEqual(fixture.cleanup_processes([second,first],[log],target),['fixture process failure'])
+        first.wait.assert_called_once_with(timeout=5);second.terminate.assert_called_once();second.wait.assert_called_once_with(timeout=5)
+        log.close.assert_called_once();target.shutdown.assert_called_once();target.server_close.assert_called_once()
+    def test_wrong_ca_requires_specific_certificate_error_not_general_502(self):
+        import polaris_naive_loopback as fixture
+        for message in ['cert authority invalid','proxy certificate invalid','ERR_CERT_AUTHORITY_INVALID']:
+            self.assertTrue(fixture.certificate_rejection(message))
+        for message in ['HTTP502 Bad Gateway','connection refused','name not resolved','network timeout','']:
+            self.assertFalse(fixture.certificate_rejection(message))
 
 
 class GuestProtocolRegressionTests(unittest.TestCase):

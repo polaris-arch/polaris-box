@@ -17,7 +17,7 @@ sys.dont_write_bytecode = True
 from polaris_openwrt import plan, require, run
 from polaris_native_distribution import encode, file_info
 from polaris_go_environment import verify_source
-from polaris_naive_loopback import main as naive_loopback
+from polaris_naive_loopback import main as naive_loopback, matching_phase_pids
 
 def port():
     with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
@@ -29,9 +29,9 @@ def fetch(pin,path):
     require(file_info(path)['sha256']==pin['sha256'],'official guest image hash differs')
     return {'url':pin['url'],**file_info(path)}
 
-def ssh_command(ssh,command,data=None):
+def ssh_command(ssh,command,data=None,timeout=300):
     return subprocess.run([*ssh,'set -eu; '+command],input=data,
-                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=300)
+                          stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
 
 def checked_stdout(result,command,expected_exit=0):
     require(result.returncode==expected_exit,'guest operation failed: '+command+'\n'
@@ -181,7 +181,7 @@ def validate(repo,expected,architecture,form,inputs,output):
         require(naive['actualOpenWrtGuestClient'] and naive['caBundleUsed'] and naive['responses']['trusted']['accepted']
             and not naive['responses']['wrong']['accepted'],'actual guest Naive TLS-H2/CA controls failed')
         checks['naiveTLSH2']=True;checks['wrongCARejected']=True
-        tun_config={'log':{'level':'debug'},'inbounds':[{'type':'tun','tag':'actual-gvisor','interface_name':'polaris-test-tun',
+        tun_config={'log':{'level':'debug','output':'/tmp/polaris-gvisor.log'},'inbounds':[{'type':'tun','tag':'actual-gvisor','interface_name':'polaris-test-tun',
             'address':['172.31.99.1/30'],'auto_route':False,'stack':'gvisor'}], 'outbounds':[{'type':'direct'}],
             'route':{'rules':[{'ip_cidr':['198.18.0.1/32'],'action':'route-options','override_address':'127.0.0.1','override_port':18081}]}}
         execute('cat > /etc/sing-box/config.json',data=json.dumps(tun_config).encode())
@@ -194,10 +194,16 @@ def validate(repo,expected,architecture,form,inputs,output):
                 "&& [ \"$response\" = actual-gvisor-tun-response ]; then exit 0; fi; sleep 1; done; "
                 "cat /tmp/httpd.log /tmp/http-probe.log; exit 1")
         execute('uci set sing-box.main.enabled=1; uci set sing-box.main.conffile=/etc/sing-box/config.json; uci commit sing-box; /etc/init.d/sing-box start')
-        time.sleep(3)
-        procd=json.loads(execute("ubus call service list '{\"name\":\"sing-box\"}'"))
-        require(any(x.get('running') is True for x in procd.get('sing-box',{}).get('instances',{}).values()),'procd did not run actual core');checks['procd']=True
-        execute('ip link show polaris-test-tun; ip route add 198.18.0.1/32 dev polaris-test-tun')
+        deadline=time.monotonic()+90
+        while time.monotonic()<deadline:
+            procd=json.loads(execute("ubus call service list '{\"name\":\"sing-box\"}'"))
+            probe=ssh_command(ssh,'ip link show polaris-test-tun',timeout=10)
+            event_log.write('TUN READINESS\n'+probe.stdout.decode(errors='replace')+probe.stderr.decode(errors='replace')+'\nEXIT '+str(probe.returncode)+'\n');event_log.flush()
+            if len(matching_phase_pids(procd,'/etc/sing-box/config.json'))==1 and probe.returncode==0:break
+            time.sleep(.2)
+        else:raise TimeoutError('exact gvisor procd/config/TUN phase did not become ready')
+        checks['procd']=True
+        execute('ip route add 198.18.0.1/32 dev polaris-test-tun')
         require(b'actual-gvisor-tun-response' in execute('wget -T 15 -qO- http://198.18.0.1:18081/token'),'actual gvisor TUN request failed');checks['gvisorTUN']=True
         require(receipt['core']['sha256'].encode() in execute('sha256sum /usr/bin/sing-box'),'running core identity changed')
         (output/'procd-observation.json').write_bytes(encode(procd));(output/'cronet-observation.json').write_bytes(encode(smoke))
@@ -213,11 +219,24 @@ def validate(repo,expected,architecture,form,inputs,output):
         (output/'GUEST-FAILURE.json').write_bytes(encode({'sourceCommit':expected,'architecture':architecture,'format':form,
             'checks':checks,'error':str(error),'status':'failed','realDeviceAcceptance':False}));raise
     finally:
-        if process and process.poll() is None:
-            os.killpg(process.pid,signal.SIGTERM)
-            try:process.wait(timeout=10)
-            except subprocess.TimeoutExpired:os.killpg(process.pid,signal.SIGKILL);process.wait()
-        event_log.close();vm_log.close()
+        try:
+            try:
+                if process and process.poll() is None:
+                    for remote,local in [('/tmp/polaris-gvisor.log','gvisor-runtime.log'),('/tmp/httpd.log','gvisor-httpd.log')]:
+                        try:
+                            diagnostic=ssh_command(ssh,'cat '+shlex.quote(remote),timeout=10)
+                            (output/local).write_bytes(diagnostic.stdout+diagnostic.stderr)
+                        except (OSError,subprocess.SubprocessError) as error:(output/(local+'.capture-error')).write_text(str(error)+'\n')
+            finally:
+                if process and process.poll() is None:
+                    try:os.killpg(process.pid,signal.SIGTERM)
+                    except ProcessLookupError:pass
+                    try:process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        try:os.killpg(process.pid,signal.SIGKILL)
+                        except ProcessLookupError:pass
+                        process.wait(timeout=10)
+        finally:event_log.close();vm_log.close()
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--repo',type=Path,default=Path(__file__).resolve().parents[1]);p.add_argument('--expected-head',required=True)
