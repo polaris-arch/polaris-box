@@ -264,8 +264,8 @@ class ProductionPublicationTests(unittest.TestCase):
                 self.assertIn('PATCH', args)
                 payload=json.loads(Path(args[-1]).read_bytes())
                 self.assertEqual(payload['tag_name'],m['tag']);self.assertEqual(payload['target_commitish'],HEAD)
-                payload = json.loads(Path(args[-1]).read_bytes())
-                self.assertEqual(payload, {'draft': False, 'prerelease': True, 'make_latest': 'false'})
+                self.assertEqual(payload, {'tag_name':m['tag'],'target_commitish':m['sourceCommit'],
+                                               'draft': False, 'prerelease': True, 'make_latest': 'false'})
                 return json.dumps(self.release(m, draft=False))
             with patch.object(publish, 'frozen_source', return_value=(config, TREE)), \
                  patch.object(publish, 'remote_tag', return_value=True), patch.object(publish, 'api', side_effect=fake_api), \
