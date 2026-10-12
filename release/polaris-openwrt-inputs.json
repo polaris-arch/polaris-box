@@ -142,7 +142,7 @@
     "gvisor compiled and isolated guest TUN/mixed validation",
     "APK/IPK install/upgrade/config-preserve/uninstall/procd in both family roots",
     "SDK and native same-source final CI; no real-device acceptance implied",
-    "fail-fast guest commands; SSH stderr excluded from protocol stdout; bounded APK repository I/O preparation retries logged; explicit uhttpd test fixture"
+    "fail-fast guest commands; SSH stderr excluded from protocol stdout; bounded APK/IPK repository I/O preparation retries logged; portable numeric ls ownership checks without assuming stat; explicit uhttpd test fixture"
   ],
   "realDeviceAcceptance": false,
   "publicationEligible": false,

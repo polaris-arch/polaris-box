@@ -38,6 +38,17 @@ def checked_stdout(result,command,expected_exit=0):
         +result.stdout.decode(errors='replace')+'\n'+result.stderr.decode(errors='replace'))
     return result.stdout
 
+def ownership_command(paths):
+    require(paths and all(Path(path).is_absolute() for path in paths),'absolute installed ownership paths required')
+    # Base OpenWrt has ls, but not necessarily stat. -l/-d/-n yields one
+    # entry per path with numeric UID/GID, without listing directory contents.
+    # Disable glob expansion when splitting the diagnostic row into fields.
+    names=' '.join(shlex.quote(str(path)) for path in paths)
+    return ('set -f; for owner_path in '+names+'; do '
+            'owner_row=$(LC_ALL=C ls -ldn -- "$owner_path"); '
+            'printf "%s\\n" "$owner_row"; set -- $owner_row; '
+            'test "$#" -ge 4; test "$3:$4" = 0:0; done')
+
 def validate(repo,expected,architecture,form,inputs,output):
     verify_source(repo,expected);config=plan(repo)
     require(not output.exists() and not output.resolve().is_relative_to(repo.resolve()),'fresh external guest output required')
@@ -108,7 +119,7 @@ def validate(repo,expected,architecture,form,inputs,output):
         from datetime import datetime,timezone
         execute("date -u -s '"+datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')+"'")
         repository_attempts=[]
-        # Bounded I/O preparation retries stay inside this one whole-batch run.
+        # Bounded APK/IPK I/O preparation retries stay inside this one whole-batch run.
         # Every failure is logged; no index/dependency checks are weakened.
         for attempt in range(1,4):
             try:
@@ -117,7 +128,7 @@ def validate(repo,expected,architecture,form,inputs,output):
             except ValueError as error:
                 repository_attempts.append({'attempt':attempt,'status':'preparation failed','error':str(error)})
                 (output/'REPOSITORY-PREPARATION.json').write_bytes(encode(repository_attempts))
-                if form!='apk' or attempt==3:raise
+                if attempt==3:raise
                 execute('date -u; ip route')
                 time.sleep(5*attempt)
         (output/'REPOSITORY-PREPARATION.json').write_bytes(encode(repository_attempts))
@@ -144,15 +155,13 @@ def validate(repo,expected,architecture,form,inputs,output):
                 ['polaris-box.conffiles','polaris-box.conffiles_static','polaris-box.list'])
         # Check all installed files and their directories, including shared parents.
         installed_paths.update(parent for path in list(installed_paths) for parent in path.parents)
-        owner_check='; '.join('test "$(stat -c %u:%g '+shlex.quote(str(path))+')" = 0:0'
-                              for path in sorted(installed_paths))
-        execute(owner_check)
+        execute(ownership_command(sorted(installed_paths)))
         require(receipt['core']['sha256'].encode() in execute('sha256sum /usr/bin/sing-box'),'installed core differs')
         actual_version=execute('sing-box version').decode()
         require(actual_version.splitlines()[0]=='sing-box version '+config['version'],'installed version differs')
         smoke=json.loads(execute('sing-box tools cronet --expected-version '+config['cronetVersion']))
         require(smoke['linkage']=='static-cgo' and smoke['gvisorCompiled'] is True,'actual guest static Cronet/gvisor differs')
-        execute('test ! -e /usr/lib/libcronet.so; test "$(stat -c %u:%g /usr/bin/sing-box)" = 0:0; sing-box check -c /etc/sing-box/config.json');checks['install']=True;checks['staticNoSidecar']=True;checks['genericCPU']=True
+        execute('test ! -e /usr/lib/libcronet.so; '+ownership_command([Path('/usr/bin/sing-box')])+'; sing-box check -c /etc/sing-box/config.json');checks['install']=True;checks['staticNoSidecar']=True;checks['genericCPU']=True
         execute('uci set sing-box.main.enabled=1; uci commit sing-box; /etc/init.d/sing-box start');time.sleep(2)
         active_before=json.loads(execute("ubus call service list '{\"name\":\"sing-box\"}'"))
         require(any(x.get('running') is True for x in active_before.get('sing-box',{}).get('instances',{}).values()),'pre-upgrade service failed')

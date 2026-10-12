@@ -115,6 +115,24 @@ class APKNativeOwnerRegressionTests(unittest.TestCase):
         self.assertTrue(all(x['uid']==x['gid']==0 for x in result['members'].values()))
 
 
+class PortableOwnerRegressionTests(unittest.TestCase):
+    def inspect(self,row,exit_code=0):
+        import polaris_openwrt_guest as guest,shlex
+        stub='ls() { printf "%s\\n" '+shlex.quote(row)+'; return '+str(exit_code)+'; }; '
+        return subprocess.run(['sh','-c',stub+'set -eu; '+guest.ownership_command([Path('/safe path'),Path('/second')])],capture_output=True)
+    def test_all_root_numeric_entries_pass_without_stat(self):
+        result=self.inspect('-rw-r--r-- 1 0 0 7 Jan 1 00:00 safe path')
+        self.assertEqual(result.returncode,0);self.assertEqual(len(result.stdout.splitlines()),2)
+    def test_nonroot_uid_or_gid_is_not_hidden_by_later_entry(self):
+        for uid,gid in [(1001,0),(0,1001)]:
+            with self.subTest(uid=uid,gid=gid):
+                result=self.inspect(f'-rw-r--r-- 1 {uid} {gid} 7 Jan 1 00:00 safe path')
+                self.assertNotEqual(result.returncode,0);self.assertEqual(len(result.stdout.splitlines()),1)
+    def test_missing_utility_and_incomplete_numeric_row_fail_closed(self):
+        self.assertNotEqual(self.inspect('',127).returncode,0)
+        self.assertNotEqual(self.inspect('incomplete').returncode,0)
+
+
 class GuestProtocolRegressionTests(unittest.TestCase):
     def test_ssh_warning_is_not_part_of_version_or_json_stdout(self):
         import polaris_openwrt_guest as guest
