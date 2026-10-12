@@ -46,13 +46,16 @@ jobs:
           GOCACHE: ${{ runner.temp }}/batch-test-gocache
         run: |
           set -euo pipefail
+          python3 -B producer/scripts/polaris_fork_maintenance.py --source "$GITHUB_SHA" > "$RUNNER_TEMP/fork-maintenance-audit.json"
           python3 -B -m unittest discover -s producer/scripts -p 'test_polaris_*.py' -v 2>&1 | tee "$RUNNER_TEMP/whole-batch-contracts.log"
       - name: Preserve batch contract results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: polaris-box-batch-contracts-${{ github.run_id }}
-          path: ${{ runner.temp }}/whole-batch-contracts.log
+          path: |
+            ${{ runner.temp }}/whole-batch-contracts.log
+            ${{ runner.temp }}/fork-maintenance-audit.json
           if-no-files-found: warn
       - id: plan
         shell: bash

@@ -1,14 +1,26 @@
 # Polaris kernel and platform-library asset contract
 
-This contract prepares a new candidate; it does not publish assets or retarget any
-existing source tag. The desktop source-only tag `polaris-v1.15.0-alpha.11-1` and
-the existing consumer source remain immutable during their current verification.
-A new version/tag must pin the reviewed new source commit/tree. The exact version
-is reserved by the integration owner after source review, not inferred from main.
+Current canonical production selection and the exact six-desktop/four-OpenWrt
+upload contract are in [POLARIS_PRODUCTION_RELEASE.md](POLARIS_PRODUCTION_RELEASE.md).
+The current immutable `v1.15.0-alpha.12.polaris.1` release remains available while
+its active consumer migrates. Historical alpha.11 role tags/receipts retain their
+original identity. Candidate source review or a historical compile does not
+create a new published tag, index or mobile artifact.
+
+This wider capability inventory includes the existing Android/Apple build helper
+and non-Naive presets. Their source implementation is distinct from the current
+desktop/OpenWrt publisher scope and does not certify all native slices or devices.
+See [fork maintenance](POLARIS_FORK_MAINTENANCE.md) for the original functionality,
+released-baseline policy and invalidated receipt responsibilities.
 
 ## gVisor and stack selection
 
-The fixed `sing-tun` dependency is `5c2edb183cc92eb190d41c04dedfa5519ca3e78c`.
+The upstream `sing-tun` baseline is `5c2edb183cc92eb190d41c04dedfa5519ca3e78c`.
+The product uses the complete source-owned local replacement under
+`third_party/sing-tun`, including the Windows DNS changes. Its actual tree,
+file inventory and source patch are pinned by
+`release/dependency-sources/sing-tun-replacement.json`; the original module h1
+does not authenticate modified replacement bytes.
 `stack.go` selects `NewGo` for the empty stack and `go`; explicit `system`, `mixed`
 and `gvisor` select their respective implementations. Compiling `with_gvisor`
 provides a capability and does not change that default or the App's configuration.
@@ -132,8 +144,9 @@ workflow SHA/run/job, Go/gomobile/gobind, CGO, complete tags/linker flags, compi
 and effective SDK/NDK version, architecture, raw/member/final archive hashes,
 Cronet module/blob identity, native ABI/dependencies and load result. Downloaded
 NDK archive revision is not proof of the compiler selected by the helper.
-Root `polaris-box-<version>-SHA256SUMS` and `polaris-box-<version>-provenance.json`
-cover exact published assets. Mobile receipts additionally record all JNI or
+The current publisher uses root `SHA256SUMS` and `polaris-box-assets.json`
+to cover exact published assets; archive-internal provenance remains measured
+producer evidence. Historical release filenames are not new upload requirements. Mobile receipts additionally record all JNI or
 framework slice binaries and final native link evidence. Never fill unknown
 hashes from an unbuilt artifact.
 
