@@ -379,32 +379,9 @@ class ProductionTests(unittest.TestCase):
             inputs.mkdir()
             with patch.object(production, 'frozen_source', return_value=(config, 'c' * 40)):
                 with self.assertRaisesRegex(ValueError, 'six-target'):
-                    production.assemble(REPO, HEAD, inputs, old, base / 'out')
+                    production.assemble(REPO, HEAD, inputs, base/'openwrt', base/'guests', base / 'out')
 
-    def test_standalone_source_replay_needs_no_legacy_release_download(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            config = copy.deepcopy(self.config)
-            nested = b'inert-exact-retained-input'
-            config['reusedSource'].update(bytes=len(nested), sha256=production.sha(nested))
-            source = base / 'new-source.tar.gz'
-            root = 'polaris-box-' + config['version'] + '-source'
-            with tarfile.open(source, 'w:gz') as writer:
-                for name, data in [('core-source.tar', b'inert-source'), ('README.md', b'replay'),
-                    ('SOURCE-INDEX.json', encode({'version': config['version'], 'sourceCommit': HEAD})),
-                    ('reused-inputs.tar.gz', nested)]:
-                    entry = tarfile.TarInfo(root + '/' + name)
-                    entry.size = len(data)
-                    writer.addfile(entry, io.BytesIO(data))
-            with patch.object(production.urllib.request, 'urlopen', side_effect=AssertionError('network forbidden')):
-                production.recover_source(config, source, production.digest(source), HEAD, base / 'recovered')
-            self.assertEqual((base / 'recovered').read_bytes(), nested)
-            with self.assertRaises(ValueError):
-                production.recover_source(config, source, '0' * 64, HEAD, base / 'bad')
-            with self.assertRaises(ValueError):
-                production.recover_source(config, source, production.digest(source), 'd' * 40, base / 'bad')
-
-    def test_complete_same_run_assembly_and_standalone_replay_preserve_all_pins(self):
+    def test_complete_same_run_desktop_assembly_preserves_pins_and_uses_public_sources(self):
         # Inert binary-shaped fixtures only: mocks return static Go metadata, never execute kernels.
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -461,22 +438,7 @@ class ProductionTests(unittest.TestCase):
                 # technical archive; assembly must select the controlled final path.
                 self.assertTrue(Path(receipt['archivePath']).exists())
                 (out / 'production-receipt.json').write_bytes(encode(final))
-            module = final['buildGraph']['normalModules'][0]
-            zip_bytes = b'inert-verified-module-source'
-            component = b'inert-component-source'
-            old = base / 'old.tar.gz'
-            original_index = {'modules': [{**module, 'sourceBundleMember': 'modules/module.zip',
-                'zipBytes': len(zip_bytes), 'zipSha256': production.sha(zip_bytes)}],
-                'sourceArchiveInputs': [{'filename': 'component.tar.gz', 'bytes': len(component),
-                                        'sha256': production.sha(component)}]}
-            with tarfile.open(old, 'w:gz') as writer:
-                for name, data in [('SOURCE-INDEX.json', encode(original_index)),
-                                   ('modules/module.zip', zip_bytes), ('sources/component.tar.gz', component)]:
-                    entry = tarfile.TarInfo(name)
-                    entry.size = len(data)
-                    writer.addfile(entry, io.BytesIO(data))
             config = copy.deepcopy(self.config)
-            config['reusedSource'] = file_info(old)
             def static_read(args, *unused):
                 path = Path(args[-1])
                 if args[:3] == ['go', 'version', '-m']:
@@ -487,9 +449,12 @@ class ProductionTests(unittest.TestCase):
             with patch.object(production, 'frozen_source', return_value=(config, 'c' * 40)), \
                  patch.object(production, 'verify_source'), patch.object(production, 'run', side_effect=static_read), \
                  patch.object(production.subprocess, 'check_output', return_value=b'inert-new-source-tar'), \
+                 patch('polaris_openwrt.validate_assembled_openwrt', return_value=[]), \
+                 patch('polaris_public_sources.delivery', return_value={'method':'fixed-public-source-references'}), \
+                 patch('polaris_public_sources.verify_public', return_value={'fixture':True}), \
                  patch.dict(production.os.environ, {'GITHUB_RUN_ID': '20', 'GITHUB_RUN_ATTEMPT': '1'}):
-                result = production.assemble(REPO, HEAD, inputs, old, base / 'final')
-                self.assertEqual(result['assetCount'], 9)
+                result = production.assemble(REPO, HEAD, inputs, base/'ow',base/'guest', base / 'final')
+                self.assertEqual(result['assetCount'], 8)
                 index = json.loads((base / 'final/polaris-box-assets.json').read_bytes())
                 self.assertEqual(len(index['platforms']), 6)
                 self.assertFalse(index['publicationEligible'])
@@ -505,16 +470,15 @@ class ProductionTests(unittest.TestCase):
                     return static_read(args, *unused)
                 with patch.object(production, 'run', side_effect=wrong_buildid):
                     with self.assertRaisesRegex(ValueError, 'actual packaged Go graph/BuildID differs'):
-                        production.assemble(REPO, HEAD, inputs, old, base / 'wrong-buildid-output')
-                source = base / 'final' / index['sourceAsset']['name']
-                production.recover_source(config, source, index['sourceAsset']['sha256'], HEAD, base / 'recovered-input')
-                self.assertEqual((base / 'recovered-input').read_bytes(), old.read_bytes())
+                        production.assemble(REPO, HEAD, inputs,base/'ow',base/'guest', base / 'wrong-buildid-output')
+                self.assertNotIn('sourceAsset',index)
+                self.assertEqual(index['sourceDelivery']['method'],'fixed-public-source-references')
                 receipt_path = next(inputs.rglob('production-receipt.json'))
                 mixed = json.loads(receipt_path.read_bytes())
                 mixed['workflowAttempt'] = '2'
                 receipt_path.write_bytes(encode(mixed))
                 with self.assertRaisesRegex(ValueError, 'mixed source/run/attempt/version'):
-                    production.assemble(REPO, HEAD, inputs, old, base / 'mixed-output')
+                    production.assemble(REPO, HEAD, inputs,base/'ow',base/'guest', base / 'mixed-output')
 
     def test_workflow_is_manual_no_publishing_and_does_not_retarget_historical_lanes(self):
         workflow = (REPO / '.github/workflows/polaris-production-release.yml').read_text()

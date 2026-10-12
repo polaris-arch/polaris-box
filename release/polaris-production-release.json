@@ -2,10 +2,10 @@
   "schema": "polaris-production-release-plan-v1",
   "repository": "polaris-arch/polaris-box",
   "repositoryId": 1407705262,
-  "version": "1.15.0-alpha.12.polaris.1",
-  "tag": "v1.15.0-alpha.12.polaris.1",
+  "version": "1.15.0-alpha.12",
+  "tag": "v1.15.0-alpha.12",
   "prerelease": true,
-  "sourceBaseCommit": "52b5125407cb67e1fcff342ac27a4226d11676c5",
+  "sourceBaseCommit": "797d1d1a50bb99acc2542c45c7a889b3f143ecaf",
   "upstreamTag": "v1.15.0-alpha.12",
   "upstreamCommit": "25b0d5ea3e466d246c708ac0f20d0448110e566c",
   "assetPrefix": "polaris-box",
@@ -13,12 +13,6 @@
   "inputPinsSha256": "445ec7ddf37748a72d26be3900cd256875a20e94abf4096dcfff609947083447",
   "noticeIndexSha256": "b9127a5c25821cca2bce26b24a63b7c114902d36421e131b3e1d9568270f8e97",
   "noticeSha256": "2bb7881f9748328b6d1093025857781b93924ba594e4d7bfc0374429993a8ae2",
-  "reusedSource": {
-    "name": "polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz",
-    "bytes": 271716261,
-    "sha256": "70ff6e51660cc8ea140a30513c42c7b842b4fdb62ba41d863b08405db63ea5ed",
-    "url": "https://github.com/polaris-arch/polaris-box/releases/download/polaris-box-v1.15.0-alpha.11-2/polaris-box-a01-desktop-source-candidate-six-platforms-v4.tar.gz"
-  },
   "desktop": [
     {
       "target": "linux/amd64",
@@ -112,7 +106,7 @@
     "implementedDesktopArchives": 6,
     "otherCLIArchives": "38 not supported by this producer",
     "linuxPackages": "31 not produced",
-    "openWrtPackages": "64 not produced",
+    "openWrtPackages": "four generic amd64/arm64 APK/IPK produced; remaining upstream variants outside this agreed batch",
     "upstreamClients": "29 SFA/SFI/SFL/SFM/SFW assets belong to upstream clients; Polaris App packaging is owned separately"
   },
   "consumerContract": {
@@ -161,11 +155,11 @@
     }
   },
   "publication": {
-    "state": "blocked-until-independent-source-review-native-builds-license-source-review-and-consumer-signoff",
+    "state": "pending whole-batch source/license review and exact final platform/package/source/guest outputs",
     "publicUploadPerformed": false,
     "deviceAcceptance": false,
     "moveUsedTags": false,
-    "deleteHistoricalAssets": false
+    "deleteHistoricalAssets": "only after active fixed consumers migrate and exact cleanup scope is approved"
   },
   "testingSynchronization": {
     "state": "blocked-non-fast-forward; no rewrite authorized in this batch",
@@ -173,11 +167,31 @@
     "upstreamTestingCommit": "e4b7e692f4545890bfc9d43960328e1449fa803b"
   },
   "deliveryExits": {
-    "native": "manual six-native candidates + same-run assembly; no release mutation",
-    "prepare": "local exact nine-assets preparation from real native index plus independently hashed source/license/App-contract approvals; computes expected annotated tag object, creates no tag/ref",
+    "native": "one whole-batch source: six native desktop builds, two musl static cores, four OpenWrt packages and four isolated guest gates; same-run assembly, no publishing",
+    "prepare": "explicit local byte-pinned twelve-asset preparation after parent whole-batch source/license/layout+actual artifact review; raw hashed review evidence, no manufactured approval JSON",
     "stage": "explicit new annotated tag + draft + immutable missing-only uploads; fork only; never overwrite existing tag/assets",
-    "publish": "explicit inspected full draft ID/tag object/manifest digest; public prerelease then anonymous nine-asset hash readback",
+    "publish": "explicit inspected complete draft/tag object/manifest digest; public prerelease then twelve-asset anonymous full-byte readback",
     "App": "separate owner release download-to-final-carrier acceptance; not implemented by fork publisher",
     "mobile": "separate batch; required artifacts/API/JNI/16KiB/PacketTunnel/signature/device gates not completed"
+  },
+  "publicSourceInputs": {
+    "path": "release/polaris-public-source-inputs.json",
+    "sha256": "fe665bcdd1d65757b51cf323172f252dbab014a02da6cb78457ed395e8d47a0c"
+  },
+  "openwrtInputs": {
+    "path": "release/polaris-openwrt-inputs.json",
+    "sha256": "620a0f6d7750c9bec6bea0a3f9d1c59d4d8a4552b73818229f1ad4da010a8b95"
+  },
+  "openwrt": {
+    "architectures": [
+      "x86_64",
+      "aarch64_generic"
+    ],
+    "formats": [
+      "apk",
+      "ipk"
+    ],
+    "providerContract": "polaris-openwrt-release-v1",
+    "scope": "OpenWrt24.10 opkg and25.12 apk3; fixed CGO musl static Cronet; real devices separate"
   }
 }

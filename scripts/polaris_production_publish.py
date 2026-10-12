@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Review-gated production desktop release actions; never called by native CI.
+"""Review-gated production desktop/OpenWrt release actions; never called by native CI.
 
 Preparation is local only. No cleanup/overwrite, upstream writes, device changes,
 mobile acceptance, signing assertion or automatic publication from build results.
@@ -39,15 +39,15 @@ def annotation(head, tag, epoch, name, email):
     require(epoch.isdigit(), 'explicit UTC tag epoch required')
     require(name and email and not any(c in name + email for c in '\n\r\0<>'), 'invalid tagger identity')
     return (f'object {head}\ntype commit\ntag {tag}\ntagger {name} <{email}> {epoch} +0000\n\n'
-            f'Polaris-box {tag[1:]} desktop CLI\nSource: {head}\n'
-            'Six native desktop targets; mobile/final App acceptance is separate.\n').encode()
+            f'Polaris-box {tag[1:]}\nSource: {head}\n'
+            'Six native desktop targets and four OpenWrt packages; mobile/final App/device acceptance is separate.\n').encode()
 
 
 def tag_sha(data):
     return hashlib.sha1(b'tag ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 
 
-def prepare(repo, expected, inputs, index_sha, approvals, approvals_sha, output, epoch, name, email):
+def prepare(repo, expected, inputs, index_sha, review_evidence, review_sha, output, epoch, name, email):
     config, tree = frozen_source(repo, expected)
     require(not output.exists() and not output.resolve().is_relative_to(repo.resolve()), 'fresh external preparation required')
     raw = (inputs / 'polaris-box-assets.json').read_bytes()
@@ -58,30 +58,36 @@ def prepare(repo, expected, inputs, index_sha, approvals, approvals_sha, output,
             and index['repository'] == REPOSITORY and index['tagObject'] is None, 'actual assembly identity differs')
     require(len(index['platforms']) == 6 and {r['target'] for r in index['platforms']}
             == {r['target'] for r in config['desktop']}, 'actual six native receipts required')
-    # A reviewed source commit alone is insufficient: reviewer approvals bind the
-    # exact already-produced index and scope. This program cannot create approvals.
-    approval_bytes = approvals.read_bytes()
-    require(sha(approval_bytes) == approvals_sha, 'independently reviewed approvals hash differs')
-    review = json.loads(approval_bytes)
-    require(review['schema'] == 'polaris-production-approvals-v1' and review['sourceCommit'] == expected
-            and review['version'] == config['version'] and review['nativeIndexSha256'] == index_sha
-            and review['scope'] == 'six-desktop-CLI', 'approval scope/input differs')
-    for gate in APPROVAL_GATES:
-        require(review['gates'][gate]['status'] == 'approved' and review['gates'][gate]['reviewer']
-                and review['gates'][gate]['evidence'], 'missing actual approval: ' + gate)
+    # Preserve actual whole-batch parent review as raw evidence. Do not require
+    # a manufactured approval JSON or create an approval from CI success.
+    review_bytes = review_evidence.read_bytes()
+    require(sha(review_bytes) == review_sha, 'independently reviewed evidence hash differs')
+    review_text = review_bytes.decode('utf-8')
+    require(expected in review_text and index_sha in review_text,
+            'actual review evidence must bind this source and produced index')
+    review = {'sha256': review_sha, 'bytes': len(review_bytes), 'text': review_text,
+              'scope': 'six desktop CLI archives + four OpenWrt packages; whole-batch source/license/layout/actual artifact review'}
+    require(len(index.get('openwrtPlatforms', [])) == 2
+            and {r['architecture'] for r in index['openwrtPlatforms']} == {'x86_64', 'aarch64_generic'}, 'actual two OpenWrt rows required')
+    require(index['sourceDelivery']['method'] == 'fixed-public-source-references'
+            and isinstance(index['sourceDelivery']['sourceAvailability'], dict), 'actual public source access proof required')
     require(index['workflowRun'] and index['workflowAttempt'], 'actual native run identity required')
     specifications = {r['target']: r for r in config['desktop']}
     for row in index['platforms']:
         require(row['archive']['name'] == basename(config, row['target']) + specifications[row['target']]['suffix'], 'native archive name differs')
-    require(index['sourceAsset']['name'] == 'polaris-box-' + config['version'] + '-source.tar.gz', 'standalone source name differs')
     expected_archives = {r['archive']['name']: r['archive'] for r in index['platforms']}
-    expected_archives[index['sourceAsset']['name']] = index['sourceAsset']
-    require(len(expected_archives) == 7, 'exact six native archives and standalone source required')
+    for row in index['openwrtPlatforms']:
+        require(len(row['packages']) == 2 and {p['format'] for p in row['packages']} == {'apk', 'ipk'}, 'actual four OpenWrt packages required')
+        for record in row['packages']:
+            name = 'polaris-box-' + config['version'] + '-openwrt-' + row['architecture'] + '.' + record['format']
+            require(record['package']['name'] == name, 'OpenWrt asset name differs')
+            expected_archives[name] = record['package']
+    require(len(expected_archives) == 10, 'exact six desktop archives and four OpenWrt packages required')
     require(all(p.is_file() and not p.is_symlink() for p in inputs.iterdir()), 'regular immutable assembly inputs required')
     for record in expected_archives.values():
         require(file_info(inputs / record['name']) == {k: record[k] for k in ('name', 'bytes', 'sha256')}, 'actual assembly bytes differ')
     expected_names = set(expected_archives) | {'polaris-box-assets.json', 'SHA256SUMS'}
-    require({p.name for p in inputs.iterdir()} == expected_names, 'exact nine assembled inputs required')
+    require({p.name for p in inputs.iterdir()} == expected_names, 'exact twelve assembled inputs required')
     expected_sums = ''.join(f"{file_info(inputs / n)['sha256']}  {n}\n" for n in sorted(expected_names - {'SHA256SUMS'}))
     require((inputs / 'SHA256SUMS').read_text() == expected_sums, 'actual assembled checksums differ')
     tag_bytes = annotation(expected, config['tag'], epoch, name, email)
@@ -95,7 +101,7 @@ def prepare(repo, expected, inputs, index_sha, approvals, approvals_sha, output,
     index['tagObjectState'] = 'prepared-expectation; remote tag creation and verification pending'
     index['publicationEligible'] = True
     for gate in APPROVAL_GATES:
-        index['gates'][gate] = review['gates'][gate]
+        index['gates'][gate] = {'status': 'recorded-parent-whole-batch-review', 'evidenceSha256': review_sha}
     # Public download and final App/device/mobile proof remain pending.
     (output / 'polaris-box-assets.json').write_bytes(encode(index))
     names = set(expected_archives) | {'polaris-box-assets.json'}
@@ -104,10 +110,9 @@ def prepare(repo, expected, inputs, index_sha, approvals, approvals_sha, output,
     manifest = {'schema': 'polaris-production-publication-v1', 'repository': REPOSITORY, 'repositoryId': REPOSITORY_ID,
         'sourceCommit': expected, 'sourceTree': tree, 'version': config['version'], 'tag': config['tag'],
         'tagObject': object_sha, 'tagObjectBytesHex': tag_bytes.hex(), 'assets': assets,
-        'title': 'Polaris-box ' + config['version'] + ' desktop CLI',
-        'notes': 'Six native desktop CLI archives and corresponding-source inputs.\n'
-                 'Mobile AAR/XCFramework and final Polaris App/device acceptance are separate pending deliveries.\n'
-                 'Frozen source: ' + expected + '\n', 'approvals': review, 'approvalsSha256': approvals_sha,
+        'title': config['version'],
+        'notes': (repo / 'release/POLARIS_RELEASE_NOTES.md').read_text().replace('<SOURCE_COMMIT>', expected),
+        'reviewEvidence': review, 'reviewEvidenceSha256': review_sha,
         'reviewedNativeIndexSha256': index_sha, 'nativeRun': index['workflowRun'], 'nativeAttempt': index['workflowAttempt'],
         'consumerKeys': {row['target']: row['consumerKey'] for row in config['desktop'] if row['consumerKey']},
         'publicUploadPerformed': False, 'tagCreated': False, 'mobileAcceptance': False, 'AppConsumerAcceptance': 'pending'}
@@ -128,8 +133,9 @@ def validate_manifest(path, expected_hash, expected_head):
     require(tag.startswith('object ' + expected_head + '\ntype commit\ntag ' + m['tag'] + '\n'), 'prepared tag target/name differs')
     expected = {f"polaris-box-{m['version']}-{os_name}-{arch}" + ('.zip' if os_name == 'windows' else '.tar.gz')
                 for os_name in ('linux', 'windows', 'darwin') for arch in ('amd64', 'arm64')}
-    expected |= {'polaris-box-' + m['version'] + '-source.tar.gz', 'polaris-box-assets.json', 'SHA256SUMS'}
-    require(len(m['assets']) == 9 and {a['name'] for a in m['assets']} == expected, 'exact nine assets required')
+    expected |= {'polaris-box-' + m['version'] + '-openwrt-' + a + '.' + f for a in ['x86_64', 'aarch64_generic'] for f in ['apk', 'ipk']}
+    expected |= {'polaris-box-assets.json', 'SHA256SUMS'}
+    require(len(m['assets']) == 12 and {a['name'] for a in m['assets']} == expected, 'exact twelve assets required')
     for a in m['assets']:
         require(a['name'] and '/' not in a['name'] and '\\' not in a['name']
                 and a['name'] not in ('.', '..'), 'simple asset name required')
@@ -216,8 +222,8 @@ def execute_frozen(args, m, snapshot):
                 == 'https://github.com/' + REPOSITORY + '.git', 'fork push remote differs')
         actual = command('git', '-C', args.repo, 'mktag', data=bytes.fromhex(m['tagObjectBytesHex']))
         require(actual == m['tagObject'], 'actual tag object differs')
-        command('git', '-C', args.repo, 'update-ref', 'refs/tags/' + m['tag'], actual, '0' * 40)
-        command('git', '-C', args.repo, 'push', 'polaris', 'refs/tags/' + m['tag'] + ':refs/tags/' + m['tag'])
+        # Keep local upstream tag cache untouched when the fork uses the same name.
+        command('git', '-C', args.repo, 'push', 'polaris', actual + ':refs/tags/' + m['tag'])
         require(remote_tag(args.repo, m), 'new remote tag not observed')
         release = api(endpoint, {'tag_name': m['tag'], 'name': m['title'], 'body': m['notes'],
                                 'draft': True, 'prerelease': True, 'make_latest': 'false'})
@@ -273,6 +279,8 @@ def execute_frozen(args, m, snapshot):
         key = m['consumerKeys'].get(row['target'])
         if key:
             consumer['platforms'][key] = {**row, 'releaseAsset': assets_by_name[row['archive']['name']]}
+    consumer['openwrtPackages'] = [{**record, 'releaseAsset': assets_by_name[record['package']['name']]}
+        for row in index['openwrtPlatforms'] for record in row['packages']]
     consumer['actualAppAcceptance'] = 'pending owner actual release download/load/final carrier gate'
     return {**observed, 'phase': 'public-readback', 'anonymousReadback': True,
             'assets': actual_assets, 'consumerContract': consumer}
@@ -289,18 +297,18 @@ def main():
     parser.add_argument('--release-id', type=int)
     parser.add_argument('--inputs', type=Path)
     parser.add_argument('--index-sha256')
-    parser.add_argument('--approvals', type=Path)
-    parser.add_argument('--approvals-sha256')
+    parser.add_argument('--review-evidence', type=Path)
+    parser.add_argument('--review-evidence-sha256')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--tag-epoch')
     parser.add_argument('--tagger-name')
     parser.add_argument('--tagger-email')
     args = parser.parse_args()
     if args.action == 'prepare':
-        require(all([args.inputs, args.index_sha256, args.approvals, args.approvals_sha256,
+        require(all([args.inputs, args.index_sha256, args.review_evidence, args.review_evidence_sha256,
                      args.tag_epoch, args.tagger_name, args.tagger_email]), 'preparation arguments missing')
         result = prepare(args.repo, args.expected_head, args.inputs, args.index_sha256,
-                         args.approvals, args.approvals_sha256, args.output, args.tag_epoch, args.tagger_name, args.tagger_email)
+                         args.review_evidence, args.review_evidence_sha256, args.output, args.tag_epoch, args.tagger_name, args.tagger_email)
     else:
         require(args.manifest and args.manifest_sha256, 'frozen manifest and digest required')
         require(not args.output.exists() and not args.output.resolve().is_relative_to(args.repo.resolve()), 'fresh external receipt required')

@@ -35,7 +35,27 @@ CHANGES = {CONFIG, 'release/POLARIS_PRODUCTION_RELEASE.md',
            'third_party/sing-tun/internal/winipcfg/winipcfg_test.go',
            'release/dependency-sources/sing-tun-test-printf.patch',
            'release/dependency-sources/sing-tun-replacement.json',
-           'scripts/polaris_source_fingerprint.py'}
+           'scripts/polaris_source_fingerprint.py',
+           'release/polaris-openwrt-inputs.json',
+           'release/polaris-public-source-inputs.json',
+           'release/POLARIS_OPENWRT.md',
+           'release/POLARIS_RELEASE_NOTES.md',
+           'release/licenses/GCC-RUNTIME-LIBRARY-EXCEPTION-3.1.txt',
+           'release/licenses/MUSL-COPYRIGHT.txt',
+           'scripts/polaris_openwrt.py',
+           'scripts/polaris_openwrt_guest.py',
+           'scripts/polaris_naive_loopback.py',
+           'scripts/polaris_public_sources.py',
+           'scripts/test_polaris_openwrt.py',
+           'scripts/test_polaris_public_sources.py',
+           'release/openwrt/config.json',
+           'release/openwrt/sing-box.uci',
+           'release/openwrt/sing-box.init',
+           'release/openwrt/preinst',
+           'release/openwrt/postinst',
+           'release/openwrt/prerm',
+           'release/openwrt/postrm',
+           }
 
 
 def require(condition, message):
@@ -50,7 +70,7 @@ def sha(data):
 def plan(repo):
     config = json.loads((repo / CONFIG).read_bytes())
     require(config['repository'] == 'polaris-arch/polaris-box', 'wrong repository')
-    require(config['version'] == '1.15.0-alpha.12.polaris.1'
+    require(config['version'] == '1.15.0-alpha.12'
             and config['tag'] == 'v' + config['version'], 'frozen latest-release Polaris version required')
     require(config['upstreamTag'] == 'v1.15.0-alpha.12'
             and config['upstreamCommit'] == '25b0d5ea3e466d246c708ac0f20d0448110e566c', 'upstream migration forbidden')
@@ -70,6 +90,8 @@ def plan(repo):
             == config['noticeIndexSha256'], 'notice index drift')
     require(digest(repo / 'release/desktop-source-candidate/DESKTOP-SOURCE-NOTICE-SUPERSET.txt')
             == config['noticeSha256'], 'notice bytes drift')
+    for key in ['publicSourceInputs', 'openwrtInputs']:
+        require(digest(repo / config[key]['path']) == config[key]['sha256'], 'source-owned input map drift: ' + key)
     return config
 
 
@@ -153,7 +175,7 @@ def production_notice(repo, config, fingerprint, key):
         f"Product tree: {fingerprint['sourceTree']}; sourceOverlay: 0\n"
         "sing-box: GPL-3.0-or-later. Root LICENSE, SING-BOX-COPYING and GPL-3.0.txt accompany this archive.\n"
         "Go dependency versions/checksums: actual product source go.mod/go.sum; exact local sing-tun source is included.\n"
-        f"Corresponding source asset: polaris-box-{config['version']}-source.tar.gz\n"
+        "Corresponding source: automatic GitHub Source code archives plus fixed public sourceDelivery in polaris-box-assets.json\n"
         f"Cronet Go wrapper: GPL-3.0-or-later; https://github.com/SagerNet/cronet-go/tree/{pins['wrapperCommit']}\n"
         f"Cronet version: {pins['cronetVersion']}; library module: {library['module']}@{library['moduleVersion']}\n"
         f"Library origin: {library['moduleOrigin']}; library SHA256: {library['sha256']}\n"
@@ -181,7 +203,7 @@ def validate_build_command(repo, config, receipt, key, build_id):
             'actual build command/ldflags differ from frozen source inputs')
 
 
-def build_settings(text, expected, key):
+def build_settings(text, expected, key, expected_cgo=None):
     require(text.splitlines()[0].endswith('go1.25.5'), 'actual binary Go version differs')
     settings = {}
     for line in text.splitlines():
@@ -192,7 +214,7 @@ def build_settings(text, expected, key):
     os_name, arch = key.split('/')
     require(settings.get('vcs.revision') == expected and settings.get('vcs.modified') == 'false', 'actual binary VCS identity differs')
     require(settings.get('GOOS') == os_name and settings.get('GOARCH') == arch, 'actual binary target differs')
-    require(settings.get('CGO_ENABLED') == ('1' if os_name == 'darwin' else '0'), 'actual CGO differs')
+    require(settings.get('CGO_ENABLED') == (expected_cgo if expected_cgo is not None else ('1' if os_name == 'darwin' else '0')), 'actual CGO differs')
     # Go 1.25.5 deliberately omits -ldflags under -trimpath (go.dev/issue/52372).
     # Native and assembly independently read the actual binary using go tool buildid.
     require(settings.get('-trimpath') == 'true' and '-ldflags' not in settings,
@@ -200,8 +222,8 @@ def build_settings(text, expected, key):
     return settings
 
 
-def build_info(text, expected, key):
-    settings = build_settings(text, expected, key)
+def build_info(text, expected, key, expected_cgo=None):
+    settings = build_settings(text, expected, key, expected_cgo)
     deps, replacements = [], []
     for line in text.splitlines():
         parts = line.split('\t')
@@ -296,7 +318,7 @@ def repackage(repo, config, key, receipt, fingerprint, graph, version_output, ou
                      'sourceCommit': fingerprint['sourceCommit'], 'sourceTree': fingerprint['sourceTree'],
                      'sourceFingerprint': fingerprint, 'normalModules': graph['normalModules'],
                      'prebuiltAcquisitionModules': graph['prebuiltAcquisitionModules'],
-                     'sourceAsset': 'polaris-box-' + config['version'] + '-source.tar.gz',
+                     'sourceDelivery': 'fixed public references in polaris-box-assets.json plus automatic GitHub Source code archives',
                      'closureReview': 'pending-independent-applicability-and-compiler-runtime-review'}
     members[root + '/source/SOURCE-INDEX.json'] = (encode(source_record), 0o644)
     portable = portable_source_identity(fingerprint)
@@ -430,17 +452,9 @@ def native(repo, source, expected, key, output):
     return {'target': key, 'archive': final['archive']['name'], 'publicationEligible': False}
 
 
-def fetch_source(config, destination):
-    require(not destination.exists(), 'preserve existing source input')
-    with urllib.request.urlopen(config['reusedSource']['url'], timeout=90) as response, destination.open('xb') as out:
-        shutil.copyfileobj(response, out)
-    require(file_info(destination) == {k: config['reusedSource'][k] for k in ('name', 'bytes', 'sha256')}, 'source download differs')
-
-
-def assemble(repo, expected, inputs, reused_source, output):
+def assemble(repo, expected, inputs, openwrt_inputs, guest_inputs, output):
     config, tree = frozen_source(repo, expected)
     require(not output.exists(), 'fresh assembly output required')
-    require(file_info(reused_source) == {k: config['reusedSource'][k] for k in ('name', 'bytes', 'sha256')}, 'reused source bytes differ')
     receipt_paths = sorted(inputs.glob('*/final/production-receipt.json'))
     require(all(path.is_file() and not path.is_symlink() for path in receipt_paths), 'regular final receipts required')
     receipts = [json.loads(path.read_bytes()) for path in receipt_paths]
@@ -520,46 +534,16 @@ def assemble(repo, expected, inputs, reused_source, output):
         normal.update((d['module'], d['version'], d['h1']) for d in row['buildGraph']['normalModules'])
         acquisition.update((d['module'], d['version'], d['h1']) for d in row['buildGraph']['prebuiltAcquisitionModules'])
         index['platforms'].append(row)
-    # New standalone source payload contains the new full tracked source and exact reusable inputs.
-    # Historical a01 index flags remain historical; the outer index binds actual new module union.
-    with tarfile.open(reused_source, 'r:gz') as old:
-        original_index = json.load(old.extractfile('SOURCE-INDEX.json'))
-        covered = {(d['module'], d['version'], d['h1']) for d in original_index['modules']}
-        require(normal | acquisition <= covered, 'actual module union exceeds retained source inputs')
-        for row in original_index['modules']:
-            if (row['module'], row['version'], row['h1']) in normal:
-                require(row['sourceBundleMember'], 'actual module lacks a retained source zip')
-                entry = old.getmember(row['sourceBundleMember'])
-                require(entry.isfile() and entry.size == row['zipBytes'], 'module source input differs')
-                require(hashlib.file_digest(old.extractfile(entry), 'sha256').hexdigest() == row['zipSha256'], 'module source zip differs')
-        for row in original_index['sourceArchiveInputs']:
-            entry = old.getmember('sources/' + row['filename'])
-            require(entry.isfile() and entry.size == row['bytes'], 'component source size differs')
-            require(hashlib.file_digest(old.extractfile(entry), 'sha256').hexdigest() == row['sha256'], 'component source bytes differ')
-    source_root = 'polaris-box-' + config['version'] + '-source'
-    source_archive = output / (source_root + '.tar.gz')
-    core_source = subprocess.check_output(['git', 'archive', '--format=tar', expected], cwd=repo)
-    source_index = {'schema': 'polaris-production-corresponding-source-v1', 'version': config['version'],
-                    'sourceCommit': expected, 'sourceTree': tree, 'sourceOverlay': 0,
-                    'coreSourceTarSha256': sha(core_source), 'reusedInput': config['reusedSource'],
-                    'actualModuleUnion': [dict(module=a, version=b, h1=c) for a, b, c in sorted(normal)],
-                    'prebuiltAcquisitionModuleUnion': [dict(module=a, version=b, h1=c) for a, b, c in sorted(acquisition)],
-                    'sourceOwnedReplacement': index['platforms'][0]['sourceFingerprint']['replacement'],
-                    'scope': 'six actual desktop CLI builds; mobile and final App carriers are separate',
-                    'licenseSourceReview': 'pending-independent-applicability-and-compiler-runtime-review'}
-    with tarfile.open(source_archive, 'w:gz') as writer:
-        for name, data in [('core-source.tar', core_source), ('SOURCE-INDEX.json', encode(source_index)),
-                           ('README.md', (repo / 'release/POLARIS_PRODUCTION_RELEASE.md').read_bytes())]:
-            entry = tarfile.TarInfo(source_root + '/' + name)
-            entry.size, entry.mode, entry.mtime = len(data), 0o644, 0
-            writer.addfile(entry, io.BytesIO(data))
-        writer.add(reused_source, arcname=source_root + '/reused-inputs.tar.gz', recursive=False)
-    with tarfile.open(source_archive, 'r:gz') as reader:
-        require({m.name for m in reader} == {source_root + '/' + name for name in
-            ('core-source.tar', 'SOURCE-INDEX.json', 'README.md', 'reused-inputs.tar.gz')}, 'standalone source member set differs')
-        require(hashlib.file_digest(reader.extractfile(source_root + '/reused-inputs.tar.gz'), 'sha256').hexdigest()
-                == config['reusedSource']['sha256'], 'standalone source omitted exact retained inputs')
-    index['sourceAsset'] = file_info(source_archive)
+    from polaris_openwrt import validate_assembled_openwrt
+    from polaris_public_sources import delivery, verify_public
+    openwrt_rows = validate_assembled_openwrt(repo, expected, tree, openwrt_inputs, guest_inputs, output, run_id, attempt)
+    index['openwrtPlatforms'] = openwrt_rows
+    graphs = [r['buildGraph'] for r in index['platforms'] + openwrt_rows]
+    index['sourceDelivery'] = delivery(repo, config, expected, tree, graphs)
+    # Availability checks belong to this same whole-batch run; original bytes,
+    # complete Git source trees and toolchain source references are verified.
+    source_work = output.parent / 'public-source-check'
+    index['sourceDelivery']['sourceAvailability'] = verify_public(index['sourceDelivery'], source_work)
     # No stale preparation note and no self-hashing recursion: each emitted metadata file is
     # covered by the outer checksums; expected archive/member pins come from this frozen index.
     (output / 'polaris-box-assets.json').write_bytes(encode(index))
@@ -570,41 +554,24 @@ def assemble(repo, expected, inputs, reused_source, output):
             'publicationEligible': False, 'indexSha256': digest(output / 'polaris-box-assets.json')}
 
 
-def recover_source(config, source_archive, expected_hash, expected_head, destination):
-    """Replay from the new standalone source asset without the old release URL."""
-    require(re.fullmatch('[0-9a-f]{64}', expected_hash) is not None and digest(source_archive) == expected_hash,
-            'reviewed standalone source asset hash required')
-    require(not destination.exists(), 'preserve existing source input')
-    root = 'polaris-box-' + config['version'] + '-source'
-    with tarfile.open(source_archive, 'r:gz') as reader:
-        names = [m.name for m in reader.getmembers()]
-        wanted = {root + '/' + name for name in ('core-source.tar', 'SOURCE-INDEX.json', 'README.md', 'reused-inputs.tar.gz')}
-        require(len(names) == 4 and set(names) == wanted and all(m.isfile() for m in reader.getmembers()), 'unsafe standalone source layout')
-        index = json.load(reader.extractfile(root + '/SOURCE-INDEX.json'))
-        require(index['version'] == config['version'] and index['sourceCommit'] == expected_head,
-                'standalone source identity differs')
-        entry = reader.getmember(root + '/reused-inputs.tar.gz')
-        require(entry.size == config['reusedSource']['bytes'], 'reused source size differs')
-        with destination.open('xb') as output:
-            shutil.copyfileobj(reader.extractfile(entry), output)
-    require(digest(destination) == config['reusedSource']['sha256'], 'recovered source bytes differ')
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['plan', 'verify-source', 'native', 'fetch-source', 'assemble', 'recover-source'])
+    parser.add_argument('mode', choices=['plan', 'verify-source', 'native', 'assemble'])
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--source', type=Path)
     parser.add_argument('--expected-head')
     parser.add_argument('--target')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--inputs', type=Path)
-    parser.add_argument('--reused-source', type=Path)
-    parser.add_argument('--source-archive-sha256')
+    parser.add_argument('--openwrt-inputs', type=Path)
+    parser.add_argument('--guest-inputs', type=Path)
     args = parser.parse_args()
     config = plan(args.repo)
     if args.mode == 'plan':
-        result = {'version': config['version'], 'tag': config['tag'], 'matrix': TARGETS,
+        result = {'version': config['version'], 'tag': config['tag'], 'matrix':
+            [dict(row, kind='desktop') for row in TARGETS] +
+            [dict(os='openwrt',arch=arch,runner='ubuntu-24.04',tool_arch='amd64',kind='openwrt')
+             for arch in ['x86_64','aarch64_generic']],
                   'consumerContract': config['consumerContract'], 'publicationEligible': False}
     elif args.mode == 'verify-source':
         require(args.expected_head, 'full source SHA required')
@@ -613,17 +580,9 @@ def main():
     elif args.mode == 'native':
         require(all([args.source, args.expected_head, args.target, args.output]), 'native arguments missing')
         result = native(args.repo, args.source, args.expected_head, args.target, args.output)
-    elif args.mode == 'fetch-source':
-        require(args.output, 'source destination required')
-        fetch_source(config, args.output)
-        result = file_info(args.output)
-    elif args.mode == 'recover-source':
-        require(all([args.source, args.source_archive_sha256, args.expected_head, args.output]), 'recovery arguments missing')
-        recover_source(config, args.source, args.source_archive_sha256, args.expected_head, args.output)
-        result = file_info(args.output)
     else:
-        require(all([args.expected_head, args.inputs, args.reused_source, args.output]), 'assembly arguments missing')
-        result = assemble(args.repo, args.expected_head, args.inputs, args.reused_source, args.output)
+        require(all([args.expected_head, args.inputs, args.openwrt_inputs, args.guest_inputs, args.output]), 'assembly arguments missing')
+        result = assemble(args.repo, args.expected_head, args.inputs, args.openwrt_inputs, args.guest_inputs, args.output)
     print(json.dumps(result, indent=2))
 
 

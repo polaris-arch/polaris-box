@@ -24,23 +24,26 @@ class ProductionPublicationTests(unittest.TestCase):
             p = inputs / (production.basename(config, row['target']) + row['suffix'])
             p.write_bytes(b'inert-native-input-' + row['target'].encode())
             platforms.append({'target': row['target'], 'archive': publish.file_info(p)})
-        source = inputs / ('polaris-box-' + config['version'] + '-source.tar.gz')
-        source.write_bytes(b'inert-new-source-input')
+        openwrt=[]
+        for arch in ['x86_64','aarch64_generic']:
+            packages=[]
+            for form in ['apk','ipk']:
+                path=inputs/('polaris-box-'+config['version']+'-openwrt-'+arch+'.'+form)
+                path.write_bytes(b'inert-package-'+arch.encode()+form.encode())
+                packages.append({'format':form,'package':publish.file_info(path)})
+            openwrt.append({'architecture':arch,'packages':packages})
         index = {'schema': 'polaris-production-assets-v1', 'repository': publish.REPOSITORY,
                  'version': config['version'], 'tag': config['tag'], 'tagObject': None,
                  'sourceCommit': HEAD, 'sourceTree': TREE, 'workflowRun': '20', 'workflowAttempt': '1',
-                 'platforms': platforms, 'sourceAsset': publish.file_info(source),
+                 'platforms': platforms, 'openwrtPlatforms':openwrt,
+                 'sourceDelivery':{'method':'fixed-public-source-references','sourceAvailability':{'fixture':True}},
                  'gates': {'actualPublicDownloadConsumerAcceptance': 'pending'}}
         (inputs / 'polaris-box-assets.json').write_bytes(publish.encode(index))
         index_sha = publish.file_info(inputs / 'polaris-box-assets.json')['sha256']
         names = sorted(p.name for p in inputs.iterdir())
         (inputs / 'SHA256SUMS').write_text(''.join(publish.file_info(inputs / n)['sha256'] + '  ' + n + '\n' for n in names))
-        approvals = base / 'approvals.json'
-        approval = {'schema': 'polaris-production-approvals-v1', 'sourceCommit': HEAD,
-                    'version': config['version'], 'nativeIndexSha256': index_sha, 'scope': 'six-desktop-CLI',
-                    'gates': {g: {'status': 'approved', 'reviewer': 'independent-fixture-reviewer',
-                                 'evidence': 'inert-fixture-only'} for g in publish.APPROVAL_GATES}}
-        approvals.write_bytes(publish.encode(approval))
+        approvals = base / 'raw-review.txt'
+        approvals.write_text('Inert fixture only; never a real approval. Reviewed source '+HEAD+' and actual index '+index_sha+'.')
         return config, inputs, index_sha, approvals
 
     def prepare(self, base):
@@ -63,10 +66,10 @@ class ProductionPublicationTests(unittest.TestCase):
                                           'browser_download_url': 'https://github.com/' + publish.REPOSITORY + '/releases/download/' + m['tag'] + '/' + a['name']}
                                           for a in assets]}
 
-    def test_prepare_is_local_requires_actual_approvals_and_freezes_tag_object_and_nine_assets(self):
+    def test_prepare_is_local_requires_actual_approvals_and_freezes_tag_object_and_twelve_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest, m = self.prepare(Path(directory))
-            self.assertEqual(len(m['assets']), 9)
+            self.assertEqual(len(m['assets']), 12)
             index = json.loads((manifest.parent / 'polaris-box-assets.json').read_bytes())
             self.assertEqual(index['tagObject'], m['tagObject'])
             self.assertEqual(index['gates']['actualPublicDownloadConsumerAcceptance'], 'pending')
@@ -87,7 +90,7 @@ class ProductionPublicationTests(unittest.TestCase):
             with self.subTest(source=replace_source), tempfile.TemporaryDirectory() as directory:
                 base = Path(directory);config, inputs, index_sha, approvals = self.inputs(base)
                 initial = json.loads((inputs / 'polaris-box-assets.json').read_bytes())
-                record = initial['sourceAsset'] if replace_source else initial['platforms'][0]['archive']
+                record = initial['openwrtPlatforms'][0]['packages'][0]['package'] if replace_source else initial['platforms'][0]['archive']
                 changed = inputs / record['name'];original_copy = publish.shutil.copyfile
                 mutated = False
                 def copy_after_checked(src, dst):
@@ -131,19 +134,15 @@ class ProductionPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'manifest hash'):
                 publish.validate_manifest(manifest, publish.sha(frozen_raw), HEAD)
 
-    def test_missing_review_wrong_scope_or_new_index_blocks_before_any_output(self):
-        for mutation in [lambda a: a.update(sourceCommit='c' * 40), lambda a: a.update(scope='mobile'),
-                         lambda a: a.update(nativeIndexSha256='0' * 64),
-                         lambda a: a['gates']['licenseSourceReview'].update(status='pending'),
-                         lambda a: a['gates']['AppOwnerSignoff'].update(evidence='')]:
+    def test_missing_review_or_new_index_blocks_before_any_output(self):
+        for text in ['unbound review', HEAD+' mobile', '0'*40+' actual index']:
             with tempfile.TemporaryDirectory() as directory:
-                base = Path(directory)
-                config, inputs, index_sha, approvals = self.inputs(base)
-                a = json.loads(approvals.read_bytes()); mutation(a); approvals.write_bytes(publish.encode(a))
-                with patch.object(publish, 'frozen_source', return_value=(config, TREE)), self.assertRaises(ValueError):
-                    publish.prepare(REPO, HEAD, inputs, index_sha, approvals, publish.sha(approvals.read_bytes()),
-                                    base / 'out', '1791720000', 'Fixture', 'fixture@example.invalid')
-                self.assertFalse((base / 'out').exists())
+                base=Path(directory);config,inputs,index_sha,approvals=self.inputs(base)
+                approvals.write_text(text)
+                with patch.object(publish,'frozen_source',return_value=(config,TREE)), self.assertRaises(ValueError):
+                    publish.prepare(REPO,HEAD,inputs,index_sha,approvals,publish.sha(approvals.read_bytes()),
+                        base/'out','1791720000','Fixture','fixture@example.invalid')
+                self.assertFalse((base/'out').exists())
 
     def test_tag_annotation_changes_for_source_version_or_tagger_epoch_and_rejects_injection(self):
         data = publish.annotation(HEAD, 'v1.2.3', '1791720000', 'Fixture', 'fixture@example.invalid')
@@ -158,7 +157,7 @@ class ProductionPublicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             _, m = self.prepare(Path(directory))
             release = self.release(m, m['assets'][:3])
-            self.assertEqual(len(publish.validate_release(release, m, False, 19)), 6)
+            self.assertEqual(len(publish.validate_release(release, m, False, 19)), 9)
             with self.assertRaises(ValueError): publish.validate_release(release, m, True, 19)
             for change in [lambda r: r.update(id=20), lambda r: r.update(body='different'),
                            lambda r: r['assets'][0].update(digest='sha256:' + '0' * 64),
@@ -204,11 +203,11 @@ class ProductionPublicationTests(unittest.TestCase):
                  patch.object(publish, 'command', side_effect=command), \
                  patch.object(publish, 'public_readback', side_effect=AssertionError('draft is not public')):
                 result = publish.execute(args)
-            self.assertEqual(len(uploads), 6)
+            self.assertEqual(len(uploads), 9)
             self.assertEqual(result['phase'], 'draft-staged')
             self.assertFalse(result['public'])
 
-    def test_stage_creates_only_new_exact_tag_and_draft_then_reads_back_nine_assets(self):
+    def test_stage_creates_only_new_exact_tag_and_draft_then_reads_back_twelve_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory); manifest, m = self.prepare(base);config = production.plan(REPO)
             args = SimpleNamespace(repo=REPO, expected_head=HEAD, manifest=manifest,
@@ -243,6 +242,8 @@ class ProductionPublicationTests(unittest.TestCase):
             self.assertFalse(result['public'])
             self.assertTrue(any('mktag' in c for c in commands))
             self.assertFalse(any('PATCH' in c for c in commands))
+            self.assertFalse(any('update-ref' in c for c in commands))
+            self.assertTrue(any(c[-1] == m['tagObject']+':refs/tags/'+m['tag'] for c in commands))
 
     def test_publish_requires_full_inspected_draft_and_public_readback_does_not_assert_App_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -308,7 +309,7 @@ class ProductionPublicationTests(unittest.TestCase):
                 self.assertNotIn('Authorization', request.headers)
                 return io.BytesIO((manifest.parent / request.full_url.rsplit('/', 1)[1]).read_bytes())
             with patch.object(publish.urllib.request, 'urlopen', side_effect=download):
-                self.assertEqual(len(publish.public_readback(m)), 9)
+                self.assertEqual(len(publish.public_readback(m)), 12)
             with patch.object(publish.urllib.request, 'urlopen', return_value=io.BytesIO(b'changed')), self.assertRaises(ValueError):
                 publish.public_readback(m)
 
