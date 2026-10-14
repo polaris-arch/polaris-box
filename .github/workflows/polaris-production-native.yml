@@ -27,6 +27,7 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
 jobs:
   build:
+    if: github.repository == 'polaris-arch/polaris-box'
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     env:
@@ -64,11 +65,13 @@ jobs:
           architecture: ${{ inputs.os == 'windows' && 'x64' || inputs.tool_arch == 'amd64' && 'x64' || inputs.tool_arch }}
       - name: Admit compilation on this runner with measured system reserves
         shell: bash
+        env:
+          RESOURCE_KIND: ${{ inputs.kind }}
         run: |
           set -euo pipefail
           test "$SOURCE_COMMIT" = "$GITHUB_SHA"
           python -B producer/scripts/polaris_runner_resources.py \
-            --kind '${{ inputs.kind }}' --scratch "$RUNNER_TEMP" \
+            --kind "$RESOURCE_KIND" --scratch "$RUNNER_TEMP" \
             --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - name: OpenWrt package tools on the ephemeral runner
         if: inputs.kind == 'openwrt'
