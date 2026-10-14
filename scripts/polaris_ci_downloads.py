@@ -3,6 +3,8 @@
 import argparse
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 import re
 import shutil
@@ -21,9 +23,25 @@ def require(value, message):
         raise ValueError(message)
 
 
+def safe_ancestry(path):
+    """lstat root-to-leaf: do not traverse a link/reparse point to inspect it."""
+    path = Path(os.path.abspath(path))
+    for component in reversed([path, *path.parents]):
+        try:
+            metadata = component.lstat()
+        except FileNotFoundError:
+            break
+        require(not stat.S_ISLNK(metadata.st_mode)
+                and not (getattr(metadata, 'st_file_attributes', 0) & 0x400),
+                'unsafe archive ancestry or reparse point')
+        if component != path:
+            require(stat.S_ISDIR(metadata.st_mode), 'non-directory archive ancestor')
+    return path
+
+
 def regular(path):
-    require(not path.is_symlink() and path.is_file(), 'regular cached archive required')
-    require(path.parent.resolve() == path.parent.absolute(), 'cache parent must not be redirected')
+    path = safe_ancestry(path)
+    require(stat.S_ISREG(path.lstat().st_mode), 'regular cached archive required')
 
 
 def archive_pin(path, expected, limit):
@@ -66,7 +84,13 @@ def inspect_inputs(rows, output, github_output=None):
     invalid = False
     for role, row in rows.items():
         path = Path(row['path'])
-        state = {'expectedSha256': row['sha256'], 'limitBytes': row['limitBytes'], 'present': path.exists() or path.is_symlink()}
+        state = {'expectedSha256': row['sha256'], 'limitBytes': row['limitBytes'], 'present': None}
+        try:
+            safe_ancestry(path)
+            state['present'] = path.exists()
+        except (OSError, ValueError):
+            state.update(valid=False, error='unsafe-archive-path; no target read')
+            invalid = True
         if state['present']:
             try:
                 state.update(archive_pin(path, row['sha256'], row['limitBytes']), valid=True)
@@ -92,8 +116,9 @@ def acquire_ndk(url, expected, destination, deadline_seconds=1200):
     require(parsed.scheme == 'https' and parsed.netloc == 'dl.google.com'
             and parsed.path.startswith('/android/repository/') and not parsed.query and not parsed.fragment
             and isinstance(expected, str) and SHA.fullmatch(expected), 'fixed public NDK input required')
+    safe_ancestry(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    require(destination.parent.resolve() == destination.parent.absolute(), 'cache parent must not be redirected')
+    safe_ancestry(destination)
     if destination.exists() or destination.is_symlink():
         return archive_pin(destination, expected, NDK_LIMIT)
     partial = destination.with_name(destination.name + '.partial')
@@ -115,34 +140,63 @@ def acquire_ndk(url, expected, destination, deadline_seconds=1200):
 
 def preserve_bad_inputs(rows, output):
     """Only failed/missing partial input bytes; never copy valid tool caches."""
+    safe_ancestry(output)
     output.mkdir(parents=True, exist_ok=True)
     retained = []
     for role, row in rows.items():
         original = Path(row['path'])
         for path in (original, original.with_name(original.name + '.partial')):
-            if path.is_symlink():
-                retained.append({'role': role, 'name': path.name, 'retained': False, 'reason': 'nonregular cache input; target not followed'})
+            # Independent of archive_pin failure: a rejected path is never
+            # treated as merely a hash mismatch and copied through its parent.
+            try:
+                safe_ancestry(path)
+                metadata = path.lstat()
+                require(stat.S_ISREG(metadata.st_mode), 'nonregular input')
+            except FileNotFoundError:
                 continue
-            if not path.exists():
+            except (OSError, ValueError):
+                retained.append({'role': role, 'name': path.name, 'retained': False,
+                                 'reason': 'unsafe-ancestry-or-nonregular; target not read'})
                 continue
-            if not path.is_file():
-                retained.append({'role': role, 'name': path.name, 'retained': False, 'reason': 'nonregular input'})
-                continue
-            if path.stat().st_size > row['limitBytes']:
-                retained.append({'role': role, 'name': path.name, 'bytes': path.stat().st_size,
-                                 'retained': False, 'reason': 'oversized bytes remain at original path; bounded artifact copy refused'})
+            if metadata.st_size > row['limitBytes']:
+                retained.append({'role': role, 'name': path.name, 'bytes': metadata.st_size,
+                                 'retained': False, 'reason': 'oversized; bounded copy refused'})
                 continue
             try:
                 archive_pin(path, row['sha256'], row['limitBytes'])
                 continue
             except (OSError, ValueError):
-                target = output / path.name
-                require(not target.exists(), 'preserve earlier failed input evidence')
-                shutil.copyfile(path, target)
-                with path.open('rb') as stream:
-                    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-                retained.append({'role': role, 'name': path.name, 'bytes': path.stat().st_size,
-                                 'sha256': digest, 'retained': True})
+                # Repeat ancestry and regular-file checks immediately before
+                # opening. NOFOLLOW/fstat bind copying to the checked inode.
+                target = None
+                created = False
+                try:
+                    safe_ancestry(path)
+                    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+                    with os.fdopen(fd, 'rb') as source:
+                        opened = os.fstat(source.fileno())
+                        require(stat.S_ISREG(opened.st_mode)
+                                and (opened.st_dev, opened.st_ino) == (metadata.st_dev, metadata.st_ino),
+                                'archive inode changed before preservation')
+                        target = output / path.name
+                        safe_ancestry(target)
+                        with target.open('xb') as destination:
+                            created = True
+                            copied = 0
+                            while block := source.read(1024 * 1024):
+                                copied += len(block)
+                                require(copied <= row['limitBytes'], 'input grew past preservation budget')
+                                destination.write(block)
+                    with target.open('rb') as stream:
+                        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                    retained.append({'role': role, 'name': path.name, 'bytes': target.stat().st_size,
+                                     'sha256': digest, 'retained': True})
+                except (OSError, ValueError):
+                    if created:
+                        safe_ancestry(target)
+                        target.unlink()  # Only this new incomplete evidence copy.
+                    retained.append({'role': role, 'name': path.name, 'retained': False,
+                                     'reason': 'unsafe or incomplete copy; no archive retained'})
     (output / 'bad-input-retention.json').write_text(json.dumps(retained, indent=2) + '\n')
 
 

@@ -149,3 +149,53 @@ with the necessary exact-source remote gates. No local compile/project tests,
 per-item CI, release/tag changes, paid runners or permission expansion accompany
 this efficiency batch. Formal App/mobile carriers, real devices, distribution
 signature trust and mesh root cause remain separately owned acceptance boundaries.
+
+### Consolidated f08f review correction controls
+
+All five owned workflows execute the generated command with
+`bash --noprofile --norc -e -o pipefail`; strictness applies to the actual child,
+including baseline checks and test pipelines. Guest receipts and both historical
+candidate archives retain their original upload roots. Command observations use
+separate artifacts so the assembler still reads exactly four
+`artifact-name/guest-receipt.json` files with the same source/tree/run/attempt.
+The production join keeps all original package/core and eleven guest behavior checks.
+
+A shared monotonic job clock starts before checkout/preparation. Each command
+receives the lesser of its phase cap and the remaining original job time minus
+the evidence reserve and 60-second safety margin. Patch phases share the 90-minute
+job; iOS phases share 120 minutes. Native reserves 30 minutes for archive recheck,
+failed-input preservation, handoff and upload; Android reserves 25 minutes for
+symbol/naming and AAR/observation uploads; guests reserve 10 minutes for their two
+uploads, other observed jobs reserve 15 minutes. Original job deadlines remain
+unchanged. Preparation steps have explicit caps. Every optional archive cache
+restore/save gets a fresh remaining-budget probe (at most two minutes); saves
+follow successful mandatory evidence upload, even when the producer failed.
+Timeout/cancellation of the GitHub runner itself still depends on GitHub always-step
+scheduling; the reserve is not a guarantee against runner loss or service failure.
+
+The observer uses a bounded reader queue and bounded drain, rather than waiting
+indefinitely for pipe EOF. POSIX cleanup checks the owned group after leader exit,
+interrupts first for existing producer finally cleanup, then escalates within a
+finite interval. Windows assigns a bootstrap to a private kill-on-close Job Object
+before permitting the original command, retaining ownership when its parent exits.
+Incomplete tree cleanup or drain fails explicitly; no global PID/image kill.
+Windows memory observation identifies the owned bootstrap only, not the native
+compiler or simultaneous process-tree RSS.
+The cleanup/drain budget is 15 seconds, separate from the command grant. Windows
+controls also run on the actual selfcheck Windows host, outside historical source.
+This uses the documented [Windows Job Object process-tree contract](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+Impact enumeration uses NUL-separated Git paths, including Unicode Go filenames.
+Go embed character classes remain full validation because Python fnmatch and
+Go path.Match classes differ; no uncertain pattern exempts compilation. Cache
+validation and failure preservation independently lstat the complete ancestor
+chain before reading; symlink/reparse ancestry produces metadata only. Safe
+regular hash/size failures remain preservable within the original byte limit.
+
+Controls cover strict-shell fail/pipeline/baseline stops, real ZIP common-root
+projection and exact four same-run receipts (plus wrong run/attempt/source/tree),
+leader-exit/held-pipe descendants including Windows, incomplete cleanup, EOF
+without process exit, shared short two-phase budget and slow-cache reserve,
+Unicode embed, Go negated classes, ancestor links and safe bad-byte preservation.
+They are source candidates until the reviewed exact SHA runs the unified remote
+whole-batch and full selfcheck gates. No local tests/builds or per-finding CI.

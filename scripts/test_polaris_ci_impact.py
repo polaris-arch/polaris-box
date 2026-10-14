@@ -1,4 +1,5 @@
 import json
+import re
 import hashlib
 from pathlib import Path
 import subprocess
@@ -70,6 +71,44 @@ class ImpactTests(unittest.TestCase):
             git('add', '.'); git('commit', '-qm', 'embed'); before = git('rev-parse', 'HEAD')
             guide.write_text('still prose but now compiled input\n'); git('add', '.'); git('commit', '-qm', 'doc'); head = git('rev-parse', 'HEAD')
             self.assertTrue(impact.classify(repo, {**event, 'before': before, 'after': head}, 'push', 'refs/heads/polaris-main', head)['runFull'])
+
+    def test_real_unicode_go_filename_and_go_character_classes_keep_full(self):
+        for filename, pattern in [('诊断.go', 'release/*'), ('embed.go', '[!r]elease/*'),
+                                  ('embed.go', '[^x]elease/*')]:
+            with self.subTest(filename=filename, pattern=pattern), tempfile.TemporaryDirectory() as folder:
+                repo=Path(folder)
+                def git(*args):
+                    return subprocess.check_output(['git','-C',str(repo),*args],stderr=subprocess.PIPE).decode().strip()
+                git('init','-q');git('config','user.name','fixture');git('config','user.email','fixture@example.invalid')
+                git('config','core.quotePath','true')
+                guide=repo / next(iter(impact.PROSE));guide.parent.mkdir();guide.write_text('instructions')
+                (repo / filename).write_text('package box\nimport _ "embed"\n//go:embed '+pattern+'\nvar guide string\n')
+                git('add','.');git('commit','-qm','embedded');before=git('rev-parse','HEAD')
+                guide.write_text('revised instructions');git('add','.');git('commit','-qm','only guide');head=git('rev-parse','HEAD')
+                event={'repository':{'full_name':'polaris-arch/polaris-box'},'before':before,'after':head,'deleted':False,'forced':False}
+                self.assertTrue(impact.classify(repo,event,'push','refs/heads/polaris-main',head)['runFull'])
+
+    def test_observed_shell_and_evidence_roots_and_shared_budget_wiring(self):
+        for filename in WORKFLOWS - set(INHERITED):
+            text=(ROOT / '.github/workflows' / filename).read_text()
+            for job in re.split(r'(?=^  [a-z][a-z0-9_-]*:\n)',text,flags=re.M):
+                steps=re.findall(r'^      - .*?(?=^      - |\Z)',job,re.M|re.S)
+                wrappers=[step for step in steps if 'polaris-command-' in step]
+                if not wrappers: continue
+                self.assertIn('Start shared job clock',steps[0])
+                for step in wrappers:
+                    self.assertIn('-- bash --noprofile --norc -e -o pipefail',step)
+                uploads=[(i,s) for i,s in enumerate(steps) if 'upload-artifact@' in s]
+                caches=[(i,s) for i,s in enumerate(steps) if 'cache/save@' in s]
+                for i,cache in caches:
+                    primary=next(n for n,s in uploads if 'id: ci_evidence_upload' in s)
+                    self.assertGreater(i,primary)
+                    self.assertIn("steps.ci_evidence_upload.outcome == 'success'",cache)
+                    self.assertIn('timeout-minutes: ${{ fromJSON(steps.',cache)
+                for _,upload in uploads:
+                    name=re.search(r'^          name: (.+)',upload,re.M)[1]
+                    if name.startswith(('polaris-box-candidate-', 'polaris-box-dns-', 'polaris-box-openwrt-guest-')):
+                        self.assertNotIn('/polaris-ci',upload)
 
     def test_complete_workflow_coverage_and_frozen_inherited_sources(self):
         self.assertEqual({p.name for p in (ROOT / '.github/workflows').glob('*.yml')}, WORKFLOWS)

@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch, Mock
 import polaris_openwrt as ow
 
@@ -222,5 +223,49 @@ class GuestProtocolRegressionTests(unittest.TestCase):
             self.assertTrue(state.exists());self.assertEqual(calls.read_text().splitlines(),['stop','start'])
             self.assertEqual((root/'etc/config/sing-box').read_text(),'user enabled configuration')
             self.assertEqual((root/'etc/sing-box/config.json').read_text(),'user JSON')
+
+
+
+class GuestArtifactLayoutTests(unittest.TestCase):
+    def test_actual_zip_path_projection_retains_exact_four_same_run_receipts(self):
+        # upload-artifact uses the least common ancestor of its search roots;
+        # archive real files relative to that root, then download/extract into
+        # four artifact-name directories and call the production join helper.
+        import polaris_openwrt as producer
+        source='a'*40;tree='b'*40;run='1234';attempt='2'
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);downloads=root/'downloads';downloads.mkdir()
+            for arch in producer.ARCHITECTURES:
+                for form in ('ipk','apk'):
+                    temp=root/(arch+'-'+form);guest=temp/'openwrt-guest';guest.mkdir(parents=True)
+                    receipt={'schema':'polaris-openwrt-guest-receipt-v1','sourceCommit':source,'sourceTree':tree,
+                             'workflowCommit':source,'workflowRun':run,'workflowAttempt':attempt,
+                             'architecture':arch,'format':form}
+                    (guest/'guest-receipt.json').write_text(json.dumps(receipt))
+                    (guest/'guest.log').write_text('original guest log')
+                    (temp/'polaris-ci').mkdir();(temp/'polaris-ci/observation.json').write_text('{}')
+                    selected=[guest/'guest-receipt.json',guest/'guest.log']
+                    common=Path(os.path.commonpath([str(p.parent) for p in selected]))
+                    archive=temp/'actual.zip'
+                    with zipfile.ZipFile(archive,'w') as z:
+                        for p in selected:z.write(p,p.relative_to(common))
+                    with zipfile.ZipFile(archive) as z:z.extractall(downloads/(arch+'-'+form))
+            rows=producer.read_same_run_guest_receipts(downloads,source,tree,run,attempt)
+            self.assertEqual(len(rows),4)
+            for wrong in [(source,tree,'1235',attempt),(source,tree,run,'1'),('c'*40,tree,run,attempt),
+                          (source,'c'*40,run,attempt)]:
+                with self.assertRaises(ValueError):producer.read_same_run_guest_receipts(downloads,*wrong)
+            # Former sibling observation input lifts common root and breaks
+            # real extraction; the production loader must reject that layout.
+            bad=root/'wrong-root';bad.mkdir()
+            for p in downloads.iterdir():
+                temp=root/p.name
+                selected=[temp/'openwrt-guest/guest-receipt.json',temp/'openwrt-guest/guest.log',temp/'polaris-ci/observation.json']
+                common=Path(os.path.commonpath([str(file.parent) for file in selected]))
+                archive=temp/'bad-projection.zip'
+                with zipfile.ZipFile(archive,'w') as z:
+                    for file in selected:z.write(file,file.relative_to(common))
+                with zipfile.ZipFile(archive) as z:z.extractall(bad/p.name)
+            with self.assertRaises(ValueError):producer.read_same_run_guest_receipts(bad,source,tree,run,attempt)
 
 if __name__=='__main__':unittest.main()

@@ -45,7 +45,7 @@ def parse_raw(raw):
 
 def embed_may_consume_guide(repo, head):
     """Conservative Go embed check, including directory and all: patterns."""
-    files = git(repo, 'ls-tree', '-r', '--name-only', head).decode().splitlines()
+    files = [name.decode('utf-8') for name in git(repo, 'ls-tree', '-r', '-z', '--name-only', head).split(b'\0') if name]
     for name in files:
         if not name.endswith('.go'):
             continue
@@ -68,6 +68,10 @@ def embed_may_consume_guide(repo, head):
             if not match or '\\' in match[1] or '`' in match[1]:
                 return True
             for pattern in shlex.split(match[1]):
+                # Go path.Match character classes are not Python fnmatch's.
+                # Until equivalence is proved, every class stays full.
+                if '[' in pattern or ']' in pattern:
+                    return True
                 pattern = pattern.removeprefix('all:')
                 for path in possible:
                     parts = path.split('/')

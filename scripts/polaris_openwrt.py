@@ -393,6 +393,20 @@ def core_build(repo, source, expected, architecture, cache, output):
     return receipt
 
 
+def read_same_run_guest_receipts(guests, expected, tree, run_id, attempt):
+    """Artifact roots must retain one-level receipt layout and exact four identities."""
+    rows = [json.loads(p.read_bytes()) for p in sorted(guests.glob('*/guest-receipt.json'))]
+    keys = {(r['architecture'], r['format']) for r in rows}
+    require(len(rows) == 4 and keys == {(a, f) for a in ARCHITECTURES for f in ['ipk', 'apk']},
+            'exact four actual guest receipts required')
+    for row in rows:
+        require(row['schema'] == 'polaris-openwrt-guest-receipt-v1' and row['sourceCommit'] == expected
+                and row['sourceTree'] == tree and row['workflowCommit'] == expected
+                and str(row['workflowRun']) == str(run_id) and str(row['workflowAttempt']) == str(attempt),
+                'mixed guest source/tree/run/attempt')
+    return rows
+
+
 def validate_assembled_openwrt(repo, expected, tree, inputs, guests, output, run_id, attempt):
     from polaris_production_release import build_info, verify_fingerprint
     from polaris_dns_identity import canonical
@@ -400,10 +414,7 @@ def validate_assembled_openwrt(repo, expected, tree, inputs, guests, output, run
     paths = sorted(inputs.glob('*/openwrt-receipt.json'))
     rows = [json.loads(p.read_bytes()) for p in paths]
     require(len(rows) == 2 and {r['architecture'] for r in rows} == set(ARCHITECTURES), 'exact two OpenWrt core receipts required')
-    guest_paths = sorted(guests.glob('*/guest-receipt.json'))
-    guest_rows = [json.loads(p.read_bytes()) for p in guest_paths]
-    guest_keys = {(r['architecture'],r['format']) for r in guest_rows}
-    require(len(guest_rows) == 4 and guest_keys == {(a,f) for a in ARCHITECTURES for f in ['ipk','apk']}, 'exact four actual guest receipts required')
+    guest_rows = read_same_run_guest_receipts(guests, expected, tree, run_id, attempt)
     for path, row in zip(paths,rows):
         require(row['schema'] == 'polaris-openwrt-native-receipt-v1' and row['sourceCommit'] == expected
             and row['sourceTree'] == tree and row['version'] == config['version'] and row['tag'] == config['tag']

@@ -63,6 +63,22 @@ class AcquisitionTests(unittest.TestCase):
                         'http://dl.google.com/android/repository/fixed.zip'):
                 with self.assertRaises(ValueError): inputs.acquire_ndk(url, sha, root / 'ndk.zip')
 
+    def test_ancestor_symlink_rejection_preserves_metadata_without_target_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);outside=root/'outside';outside.mkdir();(outside/'archive.zip').write_bytes(b'external secret')
+            link=root/'cache'
+            try:link.symlink_to(outside,target_is_directory=True)
+            except OSError as error:self.skipTest('host cannot create symlink: '+str(error))
+            rows={'tool':{'path':str(link/'archive.zip'),'sha256':'a'*64,'limitBytes':100}}
+            with patch.object(inputs,'archive_pin',side_effect=AssertionError('external target must not be read')):
+                with self.assertRaises(ValueError):inputs.inspect_inputs(rows,root/'check.json')
+                inputs.preserve_bad_inputs(rows,root/'preserved')
+            self.assertFalse((root/'preserved/archive.zip').exists())
+            kept=json.loads((root/'preserved/bad-input-retention.json').read_text())
+            self.assertTrue(kept);self.assertTrue(all(row['retained'] is False for row in kept))
+            self.assertTrue(all('unsafe' in row['reason'] for row in kept))
+            self.assertEqual((outside/'archive.zip').read_bytes(),b'external secret')
+
     def test_openwrt_content_shared_not_compiled_or_receipt_cache(self):
         repo = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as folder:
