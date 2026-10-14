@@ -27,7 +27,9 @@ from polaris_dns_identity import canonical
 
 CONFIG = 'release/polaris-production-release.json'
 UPSTREAM_DELTA = {'.github/workflows/build.yml', 'docs/changelog.md'}
-CHANGES = {'.github/workflows/polaris-selfcheck.yml', 'release/POLARIS_ASSETS.md',
+CHANGES = {'.github/workflows/polaris-production-native.yml',
+           'scripts/polaris_runner_resources.py', 'scripts/test_polaris_runner_resources.py',
+           '.github/workflows/polaris-selfcheck.yml', 'release/POLARIS_ASSETS.md',
            'release/polaris-fork-maintenance.json', 'release/POLARIS_FORK_MAINTENANCE.md',
            'scripts/polaris_fork_maintenance.py', 'scripts/test_polaris_fork_maintenance.py', CONFIG, 'release/POLARIS_PRODUCTION_RELEASE.md',
            '.github/workflows/polaris-production-release.yml',
@@ -374,7 +376,7 @@ def native(repo, source, expected, key, output):
     target(config, key)
     # Process-local isolation only; no global go env/config updates.
     os.environ.update(isolated_go_environment())
-    os.environ.update(GOMAXPROCS='2', GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0',
+    os.environ.update(GOMAXPROCS=os.environ.get('GOMAXPROCS', '2'), GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0',
                       GOOS=os_name, GOARCH=arch, CGO_ENABLED='1' if os_name == 'darwin' else '0')
     for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'CGO_CFLAGS', 'CGO_CPPFLAGS', 'CGO_CXXFLAGS', 'CGO_FFLAGS', 'CGO_LDFLAGS'):
         os.environ.pop(name, None)

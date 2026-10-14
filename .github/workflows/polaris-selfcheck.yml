@@ -67,8 +67,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: polaris-selfcheck-${{ github.ref }}-${{ inputs.source_role || 'all' }}-${{ inputs.source_commit || github.sha }}-${{ github.event_name == 'workflow_dispatch' && inputs.patch_only && 'patch-only' || 'full' }}
-  cancel-in-progress: true
+  # Only future automatic branch-tip runs supersede older tips. Manual fixed
+  # source audits and tag milestones never share that cancellation group.
+  group: polaris-selfcheck-${{ github.event_name == 'push' && github.ref_type == 'branch' && format('tip-{0}', github.ref) || format('audit-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 defaults:
   run:
@@ -114,6 +116,17 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -137,6 +150,17 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -160,6 +184,17 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -187,6 +222,17 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -214,6 +260,17 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -281,12 +338,23 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Native monitor lifecycle regressions
         run: |
-          CGO_ENABLED=1 go test -p 2 -parallel 2 -race -count=1 \
+          CGO_ENABLED=1 go test -p "$POLARIS_GO_JOBS" -parallel "$POLARIS_GO_JOBS" -race -count=1 \
             -run '^(TestMonitor|TestConstructionScope)' \
             -tags "$(cat release/DEFAULT_BUILD_TAGS),with_purego" \
             -ldflags "$(cat release/LDFLAGS)" ./experimental/libbox/ ./adapter/
@@ -333,6 +401,17 @@ jobs:
           actual=$(git rev-parse HEAD)
           test "$actual" = "$SOURCE_COMMIT"
           echo "workflow_commit=$GITHUB_SHA source_commit=$actual"
+      - name: Bound runner work using the fixed workflow-owned resource tool
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          fi
+          git show "$GITHUB_SHA:scripts/polaris_runner_resources.py" > "$RUNNER_TEMP/polaris-runner-resources.py"
+          python -B "$RUNNER_TEMP/polaris-runner-resources.py" \
+            --kind selfcheck --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}

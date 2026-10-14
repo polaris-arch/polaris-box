@@ -18,7 +18,8 @@ jobs:
     if: github.repository == 'polaris-arch/polaris-box'
     runs-on: ubuntu-24.04
     outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      openwrt: ${{ steps.plan.outputs.openwrt }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -34,6 +35,13 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
+      - name: Admit contract compilation on this runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B producer/scripts/polaris_runner_resources.py \
+            --kind contracts --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/contract-runner-budget.json" --github-env "$GITHUB_ENV"
       - name: Whole-batch source contracts and regressions
         shell: bash
         env:
@@ -41,7 +49,6 @@ jobs:
           GOWORK: 'off'
           GOFLAGS: ''
           GOTOOLCHAIN: local
-          GOMAXPROCS: '2'
           GOMODCACHE: ${{ runner.temp }}/batch-test-gomod
           GOCACHE: ${{ runner.temp }}/batch-test-gocache
         run: |
@@ -56,6 +63,7 @@ jobs:
           path: |
             ${{ runner.temp }}/whole-batch-contracts.log
             ${{ runner.temp }}/fork-maintenance-audit.json
+            ${{ runner.temp }}/contract-runner-budget.json
           if-no-files-found: warn
       - id: plan
         shell: bash
@@ -67,118 +75,48 @@ jobs:
           from pathlib import Path
           plan = json.loads((Path(os.environ['RUNNER_TEMP']) / 'polaris-plan.json').read_bytes())
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('matrix=' + json.dumps(plan['matrix'], separators=(',', ':')) + '\n')
+              for kind in ('desktop', 'openwrt'):
+                  rows = [row for row in plan['matrix'] if row['kind'] == kind]
+                  output.write(kind + '=' + json.dumps(rows, separators=(',', ':')) + '\n')
           PY
   native:
     needs: plan
     name: Production ${{ matrix.kind }} ${{ matrix.os }}/${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 2
+      # Separate hosted machines; GitHub account/runner capacity schedules jobs.
       matrix:
-        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    env:
-      GOMAXPROCS: '2'
-      GOTOOLCHAIN: local
-      GOENV: 'off'
-      GOWORK: 'off'
-      GOFLAGS: ''
-      GIT_CONFIG_COUNT: '2'
-      GIT_CONFIG_KEY_0: core.autocrlf
-      GIT_CONFIG_VALUE_0: 'false'
-      GIT_CONFIG_KEY_1: core.eol
-      GIT_CONFIG_VALUE_1: lf
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-        with:
-          ref: ${{ github.sha }}
-          path: producer
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-        with:
-          ref: ${{ github.sha }}
-          path: source
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
-        with:
-          go-version: '1.25.5'
-          architecture: ${{ matrix.tool_arch }}
-          cache: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: '3.12'
-          architecture: ${{ matrix.os == 'windows' && 'x64' || matrix.tool_arch == 'amd64' && 'x64' || matrix.tool_arch }}
-      - name: OpenWrt package tools on the ephemeral runner
-        if: matrix.kind == 'openwrt'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y zstd qemu-user fakeroot
-      - name: Build actual version, verify patched source, native capabilities and final archive
-        shell: bash
-        env:
-          PRODUCTION_TARGET: ${{ matrix.os }}/${{ matrix.arch }}
-          PRODUCTION_KIND: ${{ matrix.kind }}
-          OPENWRT_ARCH: ${{ matrix.arch }}
-          GOMODCACHE: ${{ runner.temp }}/polaris-production-gomod
-          GOCACHE: ${{ runner.temp }}/polaris-production-gocache
-        run: |
-          set -euo pipefail
-          if [[ "$PRODUCTION_KIND" == desktop ]]; then
-            python -B producer/scripts/polaris_production_release.py native \
-              --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
-              --target "$PRODUCTION_TARGET" --output "$RUNNER_TEMP/polaris-production"
-          else
-            python -B producer/scripts/polaris_openwrt.py native \
-              --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
-              --architecture "$OPENWRT_ARCH" --cache "$RUNNER_TEMP/openwrt-cache" \
-              --output "$RUNNER_TEMP/polaris-production"
-          fi
-      - name: Freeze bounded CI handoff layout
-        if: always()
-        shell: bash
-        run: |
-          python -B - <<'PYHANDOFF'
-          import hashlib, json, os, shutil
-          from pathlib import Path
-          source=Path(os.environ['RUNNER_TEMP'])/'polaris-production'
-          output=Path(os.environ['RUNNER_TEMP'])/'polaris-handoff'
-          output.mkdir(exist_ok=False)
-          if source.exists():
-              for path in source.iterdir():
-                  if path.name.startswith('work-') or path.name=='technical' and (source/'final').exists():
-                      continue
-                  dest=output/path.name
-                  if path.name=='test-inputs':
-                      dest.mkdir()
-                      for file in path.iterdir():
-                          if file.is_file() and file.suffix in ('.apk','.ipk'):
-                              shutil.copyfile(file,dest/file.name)
-                  elif path.is_dir():shutil.copytree(path,dest)
-                  elif path.is_file():shutil.copyfile(path,dest)
-          rows={str(p.relative_to(output)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in output.rglob('*') if p.is_file()}
-          (output/'HANDOFF-IDENTITY.json').write_text(json.dumps({'sourceCommit':os.environ['GITHUB_SHA'],'workflowRun':os.environ['GITHUB_RUN_ID'],'workflowAttempt':os.environ['GITHUB_RUN_ATTEMPT'],'files':rows},indent=2)+'\n')
-          PYHANDOFF
-      - name: Preserve actual output and failures
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: polaris-box-production-${{ matrix.kind }}-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/polaris-handoff
-          if-no-files-found: warn
-          retention-days: 14
+        include: ${{ fromJSON(needs.plan.outputs.desktop) }}
+    uses: ./.github/workflows/polaris-production-native.yml
+    with:
+      kind: desktop
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      tool_arch: ${{ matrix.tool_arch }}
+      runner: ${{ matrix.runner }}
+      expected_head: ${{ github.sha }}
+  native-openwrt:
+    needs: plan
+    name: Production ${{ matrix.kind }} ${{ matrix.os }}/${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      # Separate hosted machines; GitHub account/runner capacity schedules jobs.
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.openwrt) }}
+    uses: ./.github/workflows/polaris-production-native.yml
+    with:
+      kind: openwrt
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      tool_arch: ${{ matrix.tool_arch }}
+      runner: ${{ matrix.runner }}
+      expected_head: ${{ github.sha }}
   openwrt-guests:
-    needs: [plan, native]
+    needs: [plan, native-openwrt]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
         architecture: [x86_64, aarch64_generic]
         format: [ipk, apk]
@@ -230,7 +168,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   assemble:
-    needs: [plan, native, openwrt-guests]
+    needs: [plan, native, native-openwrt, openwrt-guests]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:

@@ -1,0 +1,134 @@
+# Internal producer shared by two independent same-source scheduling lanes.
+name: Polaris production native runner
+on:
+  workflow_call:
+    inputs:
+      kind:
+        type: string
+        required: true
+      os:
+        type: string
+        required: true
+      arch:
+        type: string
+        required: true
+      tool_arch:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      expected_head:
+        type: string
+        required: true
+permissions:
+  contents: read
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    env:
+      SOURCE_COMMIT: ${{ inputs.expected_head }}
+      GOTOOLCHAIN: local
+      GOENV: 'off'
+      GOWORK: 'off'
+      GOFLAGS: ''
+      GIT_CONFIG_COUNT: '2'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+      GIT_CONFIG_KEY_1: core.eol
+      GIT_CONFIG_VALUE_1: lf
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ inputs.expected_head }}
+          path: producer
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ inputs.expected_head }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.25.5'
+          architecture: ${{ inputs.tool_arch }}
+          cache: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          architecture: ${{ inputs.os == 'windows' && 'x64' || inputs.tool_arch == 'amd64' && 'x64' || inputs.tool_arch }}
+      - name: Admit compilation on this runner with measured system reserves
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_COMMIT" = "$GITHUB_SHA"
+          python -B producer/scripts/polaris_runner_resources.py \
+            --kind '${{ inputs.kind }}' --scratch "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/polaris-runner-budget.json" --github-env "$GITHUB_ENV"
+      - name: OpenWrt package tools on the ephemeral runner
+        if: inputs.kind == 'openwrt'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zstd qemu-user fakeroot
+      - name: Build actual version, verify patched source, native capabilities and final archive
+        shell: bash
+        env:
+          PRODUCTION_TARGET: ${{ inputs.os }}/${{ inputs.arch }}
+          PRODUCTION_KIND: ${{ inputs.kind }}
+          OPENWRT_ARCH: ${{ inputs.arch }}
+          GOMODCACHE: ${{ runner.temp }}/polaris-production-gomod
+          GOCACHE: ${{ runner.temp }}/polaris-production-gocache
+        run: |
+          set -euo pipefail
+          if [[ "$PRODUCTION_KIND" == desktop ]]; then
+            python -B producer/scripts/polaris_production_release.py native \
+              --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
+              --target "$PRODUCTION_TARGET" --output "$RUNNER_TEMP/polaris-production"
+          else
+            python -B producer/scripts/polaris_openwrt.py native \
+              --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
+              --architecture "$OPENWRT_ARCH" --cache "$RUNNER_TEMP/openwrt-cache" \
+              --output "$RUNNER_TEMP/polaris-production"
+          fi
+      - name: Freeze bounded CI handoff layout
+        if: always()
+        shell: bash
+        run: |
+          python -B - <<'PYHANDOFF'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          source=Path(os.environ['RUNNER_TEMP'])/'polaris-production'
+          output=Path(os.environ['RUNNER_TEMP'])/'polaris-handoff'
+          output.mkdir(exist_ok=False)
+          budget=Path(os.environ['RUNNER_TEMP'])/'polaris-runner-budget.json'
+          if budget.exists():shutil.copyfile(budget,output/budget.name)
+          if source.exists():
+              for path in source.iterdir():
+                  if path.name.startswith('work-') or path.name=='technical' and (source/'final').exists():
+                      continue
+                  dest=output/path.name
+                  if path.name=='test-inputs':
+                      dest.mkdir()
+                      for file in path.iterdir():
+                          if file.is_file() and file.suffix in ('.apk','.ipk'):
+                              shutil.copyfile(file,dest/file.name)
+                  elif path.is_dir():shutil.copytree(path,dest)
+                  elif path.is_file():shutil.copyfile(path,dest)
+          rows={str(p.relative_to(output)):{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in output.rglob('*') if p.is_file()}
+          (output/'HANDOFF-IDENTITY.json').write_text(json.dumps({'sourceCommit':os.environ['GITHUB_SHA'],'workflowRun':os.environ['GITHUB_RUN_ID'],'workflowAttempt':os.environ['GITHUB_RUN_ATTEMPT'],'files':rows},indent=2)+'\n')
+          PYHANDOFF
+      - name: Preserve actual output and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: polaris-box-production-${{ inputs.kind }}-${{ inputs.os }}-${{ inputs.arch }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/polaris-handoff
+          if-no-files-found: warn
+          retention-days: 14

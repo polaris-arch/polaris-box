@@ -332,7 +332,7 @@ def core_build(repo, source, expected, architecture, cache, output):
     goarch, machine, isa_name, isa, flags = ARCHITECTURES[architecture]
     triple = ('x86_64' if goarch == 'amd64' else 'aarch64') + '-openwrt-linux-musl'
     env = isolated_go_environment();env.update(GOOS='linux', GOARCH=goarch, CGO_ENABLED='1',
-        GOMAXPROCS='2', GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0', STAGING_DIR=str(Path(sdk['root'])/'staging_dir'))
+        GOMAXPROCS=os.environ.get('GOMAXPROCS', '2'), GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0', STAGING_DIR=str(Path(sdk['root'])/'staging_dir'))
     for name in ['CGO_CPPFLAGS', 'CGO_FFLAGS', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'LD_PRELOAD', 'LD_LIBRARY_PATH']:
         env.pop(name, None)
     for name, compiler in [('CC', 'clang'), ('CXX', 'clang++')]:

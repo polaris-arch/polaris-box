@@ -255,7 +255,7 @@ def build_native(options, producer, manifest):
         raise ValueError('source tree differs from manifest')
     if run(['git', 'status', '--porcelain=v1', '--untracked-files=all'], source):
         raise ValueError('source checkout is dirty')
-    env = dict(os.environ, GOTOOLCHAIN='local', GOMAXPROCS='2', CGO_ENABLED='1' if host_os == 'darwin' else '0',
+    env = dict(os.environ, GOTOOLCHAIN='local', GOMAXPROCS=os.environ.get('GOMAXPROCS', '2'), CGO_ENABLED='1' if host_os == 'darwin' else '0',
                GOOS=host_os, GOARCH=host_arch)
     go_info = json.loads(run(['go', 'env', '-json', 'GOVERSION', 'GOHOSTOS', 'GOHOSTARCH', 'CC'], source, env))
     if go_info['GOVERSION'] != 'go' + manifest['Go'] or (go_info['GOHOSTOS'], go_info['GOHOSTARCH']) != (host_os, host_arch):
