@@ -90,12 +90,19 @@ jobs:
           GOCACHE: ${{ runner.temp }}/polaris-production-gocache
         run: |
           set -euo pipefail
+          measured() {
+            if [[ "$RUNNER_OS" == macOS ]]; then
+              /usr/bin/time -l "$@"
+            else
+              "$@"
+            fi
+          }
           if [[ "$PRODUCTION_KIND" == desktop ]]; then
-            python -B producer/scripts/polaris_production_release.py native \
+            measured python -B producer/scripts/polaris_production_release.py native \
               --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
               --target "$PRODUCTION_TARGET" --output "$RUNNER_TEMP/polaris-production"
           else
-            python -B producer/scripts/polaris_openwrt.py native \
+            measured python -B producer/scripts/polaris_openwrt.py native \
               --source "$GITHUB_WORKSPACE/source" --expected-head "$GITHUB_SHA" \
               --architecture "$OPENWRT_ARCH" --cache "$RUNNER_TEMP/openwrt-cache" \
               --output "$RUNNER_TEMP/polaris-production"

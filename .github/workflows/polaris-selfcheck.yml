@@ -238,7 +238,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Build
         run: |
-          GOMAXPROCS="$POLARIS_COMPILE_GOMAXPROCS" CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.arch }} go build -trimpath -o /dev/null \
+          GOMAXPROCS="$POLARIS_COMPILE_GOMAXPROCS" CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.arch }} /usr/bin/time -l go build -trimpath -o /dev/null \
             -tags "$(cat release/DEFAULT_BUILD_TAGS),with_gvisor" \
             -ldflags "$(cat release/LDFLAGS)" ./cmd/sing-box
 
@@ -354,7 +354,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Native monitor lifecycle regressions
         run: |
-          CGO_ENABLED=1 go test -p "$POLARIS_GO_JOBS" -parallel 2 -race -count=1 \
+          CGO_ENABLED=1 /usr/bin/time -l go test -p "$POLARIS_GO_JOBS" -parallel 2 -race -count=1 \
             -run '^(TestMonitor|TestConstructionScope)' \
             -tags "$(cat release/DEFAULT_BUILD_TAGS),with_purego" \
             -ldflags "$(cat release/LDFLAGS)" ./experimental/libbox/ ./adapter/
@@ -362,10 +362,10 @@ jobs:
         run: .github/patch_go_for_ios.sh
       - name: Build
         run: |
-          GOMAXPROCS="$POLARIS_COMPILE_GOMAXPROCS" make lib_install
+          GOMAXPROCS="$POLARIS_COMPILE_GOMAXPROCS" /usr/bin/time -l make lib_install
           gopath=$(go env GOPATH)
           export PATH="$PATH:$gopath/bin"
-          GOMAXPROCS="$POLARIS_COMPILE_GOMAXPROCS" go run ./cmd/internal/build_libbox -target apple -platform ios/arm64
+          GOMAXPROCS="$POLARIS_COMPILE_GOMAXPROCS" /usr/bin/time -l go run ./cmd/internal/build_libbox -target apple -platform ios/arm64
       - name: Check symbols
         run: |
           find Libbox.xcframework -name '*.h' -exec cat {} + > symbols.txt

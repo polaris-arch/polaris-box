@@ -50,7 +50,7 @@ def windows_memory():
     return value.totalPhysical, value.availablePhysical
 
 
-def darwin_memory():
+def darwin_memory(details=None):
     total = int(subprocess.check_output(['sysctl', '-n', 'hw.memsize'], text=True))
     stat = subprocess.check_output(['vm_stat'], text=True)
     page = int(re.search(r'page size of (\d+) bytes', stat).group(1))
@@ -58,6 +58,8 @@ def darwin_memory():
     # pages back, plus inactive pages; purgeable can overlap and is not added.
     counts = dict(re.findall(r'^(Pages free|Pages inactive|Pages speculative):\s+(\d+)\.', stat, re.M))
     available = sum(int(counts[name]) for name in ('Pages free', 'Pages inactive', 'Pages speculative')) * page
+    if details is not None:
+        details.update(vmStatSnapshot=stat, memoryAvailableBasis='free+inactive+speculative sample; conservative estimate, not all OS-reclaimable memory')
     return total, min(total, available)
 
 
@@ -82,6 +84,7 @@ def windows_busy_cpus(cpus):
 
 def observe(directory):
     system = platform.system()
+    details = {}
     cpus = os.cpu_count()
     if not cpus:
         raise ValueError('runner CPU count unavailable')
@@ -95,14 +98,14 @@ def observe(directory):
             if amount != 'max':
                 cpus = min(cpus, max(1, math.floor(int(amount) / int(period))))
     elif system == 'Darwin':
-        total, available = darwin_memory()
+        total, available = darwin_memory(details)
     elif system == 'Windows':
         total, available = windows_memory()
     else:
         raise ValueError('unsupported runner: ' + system)
     busy = windows_busy_cpus(cpus) if system == 'Windows' else os.getloadavg()[0]
     disk = shutil.disk_usage(directory)
-    return {'platform': system, 'effectiveCPUs': cpus, 'busyCPUObservation': busy,
+    return {**details, 'platform': system, 'effectiveCPUs': cpus, 'busyCPUObservation': busy,
             'cpuObservation': '200ms busy sample' if system == 'Windows' else '1min load average',
             'memoryTotalBytes': total, 'memoryAvailableBytes': available,
             'diskTotalBytes': disk.total, 'diskFreeBytes': disk.free,
@@ -125,11 +128,15 @@ def budget(observation, kind):
         raise ValueError('available resource exceeds total')
     memory_reserve = max(GIB, observation['memoryTotalBytes'] // 5)
     disk_reserve = 2 * GIB
-    memory_slots = (observation['memoryAvailableBytes'] - memory_reserve) // MEMORY_PER_PACKAGE
-    if memory_slots < 1:
-        raise ValueError('insufficient runner memory after system reserve')
-    if observation['diskFreeBytes'] < disk_reserve + GROWTH[kind]:
-        raise ValueError('insufficient runner scratch space after system reserve')
+    estimated_memory_slots = (observation['memoryAvailableBytes'] - memory_reserve) // MEMORY_PER_PACKAGE
+    memory_pressure = estimated_memory_slots < 1
+    disk_pressure = observation['diskFreeBytes'] < disk_reserve + GROWTH[kind]
+    # Estimates choose parallelism, not a new capacity gate. A sampled deficit
+    # does not prove that a known working serial build cannot safely execute.
+    # Preserve the same estimates; reduce to the original single-package lane.
+    memory_slots = max(1, estimated_memory_slots)
+    if disk_pressure:
+        memory_slots = 1
     cpus = observation['effectiveCPUs']
     # Leave one CPU when possible. A busy/single-core runner runs one worker;
     # this is a bounded admission snapshot, not a cross-runner load scheduler.
@@ -142,6 +149,10 @@ def budget(observation, kind):
             'testRuntimePolicy': 'unchanged; do not export a job-wide GOMAXPROCS or change test -parallel',
             'memoryReserveBytes': memory_reserve, 'memoryPerPackageBytes': MEMORY_PER_PACKAGE,
             'resourceReservationsHeld': False,
+            'memoryEstimatePressure': memory_pressure, 'diskEstimatePressure': disk_pressure,
+            'estimatedMemorySlots': estimated_memory_slots,
+            'singlePackageFallback': memory_pressure or disk_pressure,
+            'capacityRejectionBasis': 'none from estimates; actual workload/platform errors remain failures',
             'diskReserveBytes': disk_reserve, 'workingSpaceBudgetBytes': GROWTH[kind],
             'scope': 'this runner; sampled estimates, not reserved resources; Linux root cgroup v2 only, nested/v1 not guaranteed; no account or fleet capacity claim'}
 
