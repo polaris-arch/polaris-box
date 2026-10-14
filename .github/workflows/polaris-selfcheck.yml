@@ -144,13 +144,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':5400,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -198,7 +205,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-linux-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-linux-0" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-linux-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-linux-0.sh"
       - name: Preserve command, failure and resource observations
         timeout-minutes: 5
         if: always()
@@ -223,13 +230,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':5400,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -277,7 +291,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-windows-build-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-windows-build-0" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-windows-build-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-windows-build-0.sh"
       - name: Preserve command, failure and resource observations
         timeout-minutes: 5
         if: always()
@@ -302,13 +316,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':5400,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -364,7 +385,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-windows-test-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-windows-test-0" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-windows-test-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-windows-test-0.sh"
       - name: Preserve command, failure and resource observations
         timeout-minutes: 5
         if: always()
@@ -393,13 +414,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':5400,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -447,7 +475,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-macos-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-macos-0" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-macos-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-macos-0.sh"
       - name: Preserve command, failure and resource observations
         timeout-minutes: 5
         if: always()
@@ -476,13 +504,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':7200,'evidenceReserveSeconds':1500,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -561,7 +596,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-android-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-android-0" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-android-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-android-0.sh"
       - name: Check symbols
         timeout-minutes: 5
         run: |
@@ -643,13 +678,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':7200,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -697,7 +739,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-ios-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-ios-0" --timeout-seconds 2700 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-ios-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-ios-0.sh"
       - name: Patch Go for iOS
         timeout-minutes: 5
         run: .github/patch_go_for_ios.sh
@@ -713,7 +755,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-ios-1 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-ios-1" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-ios-1.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-ios-1.sh"
       - name: Check symbols
         timeout-minutes: 5
         run: |
@@ -760,13 +802,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':5400,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         timeout-minutes: 5
@@ -844,7 +893,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-patch-tests-0 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-patch-tests-0" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-patch-tests-0.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-patch-tests-0.sh"
       - name: Test instances in process
         timeout-minutes: 77
         if: ${{ inputs.run_instance_tests }}
@@ -867,7 +916,7 @@ jobs:
           POLARIS_COMMAND
           python -B "$RUNNER_TEMP/polaris-ci-observe.py" --phase selfcheck-patch-tests-1 \
             --output "$RUNNER_TEMP/polaris-ci/selfcheck-patch-tests-1" --timeout-seconds 4500 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-patch-tests-1.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-selfcheck-patch-tests-1.sh"
       - name: Preserve command, failure and resource observations
         timeout-minutes: 5
         if: always()

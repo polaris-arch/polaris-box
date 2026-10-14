@@ -199,3 +199,24 @@ without process exit, shared short two-phase budget and slow-cache reserve,
 Unicode embed, Go negated classes, ancestor links and safe bad-byte preservation.
 They are source candidates until the reviewed exact SHA runs the unified remote
 whole-batch and full selfcheck gates. No local tests/builds or per-finding CI.
+
+### Explicit runner Bash after the e35 Windows execution failure
+
+All owned command wrappers bind the actual enclosing Bash executable (`$BASH`)
+at job start and carry it through `POLARIS_RUNNER_BASH`. Windows converts that
+path using bundled `cygpath -w` before passing it to native Python. The observer
+receives the absolute executable, never a bare `bash` name resolved via Windows
+PATH (which selected the WSL shim in e35). Strict child `-e -o pipefail`, original
+script bodies, budgets, process ownership and all formal gates remain unchanged.
+No WSL distribution installation or upgrade is required.
+
+The Windows observer gate adds an actual-script control with a space-containing
+path and System32 ahead of PATH. The script's marker must be observed before
+false/pipeline/wrong-baseline failures, and post-failure markers must be absent.
+The original POSIX strict/signal/detached-owner controls still skip on Windows;
+the new Windows-specific strict execution control runs there and skips on Linux.
+The platform shell contract is documented by
+[GitHub Actions shell selection](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsshell)
+and [MSYS2 native path conversion](https://www.msys2.org/docs/filesystem-paths/).
+This repair is source-only until its reviewed exact SHA passes both unified gates;
+e35 partial platform successes remain attributed to e35.

@@ -176,6 +176,30 @@ class ObservationTests(unittest.TestCase):
             row=json.loads((root/'output/observation.json').read_text())
             self.assertFalse(row['ownedTreeCleanupComplete']);self.assertEqual(row['outcome'],'failure')
 
+    @unittest.skipUnless(os.name == 'nt', 'actual Git for Windows runner shell control')
+    def test_windows_actual_runner_bash_strict_under_wsl_first_path(self):
+        shell = Path(os.environ['POLARIS_RUNNER_BASH'])
+        self.assertTrue(shell.is_absolute()); self.assertTrue(shell.is_file())
+        self.assertEqual(shell.name.lower(), 'bash.exe')
+        self.assertIn('git', str(shell.parent).lower())
+        for body in ('false; printf swallowed', 'false | tee pipeline.log; printf swallowed',
+                     'test actual = wrong-baseline; printf tests-started'):
+            with self.subTest(body=body), tempfile.TemporaryDirectory(prefix='polaris runner shell ') as folder:
+                root=Path(folder);script=root/'command with spaces.sh';output=root/'observation'
+                script.write_text('printf "actual-runner-bash\\n"\n'+body)
+                env=budget_env(folder)
+                env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')+os.pathsep+env['PATH']
+                run=subprocess.run([sys.executable,'-B',str(SCRIPT),'--phase','windows-strict','--output',str(output),
+                    '--timeout-seconds','20','--',str(shell),'--noprofile','--norc','-e','-o','pipefail',str(script)],
+                    cwd=root,env=env,capture_output=True,timeout=30)
+                self.assertNotEqual(run.returncode,0)
+                raw=(output/'command.log').read_bytes()
+                self.assertIn(b'actual-runner-bash',raw)
+                self.assertNotIn(b'swallowed',raw);self.assertNotIn(b'tests-started',raw)
+                row=json.loads((output/'observation.json').read_text())
+                self.assertTrue(row['ownedTreeCleanupComplete']);self.assertTrue(row['streamObservedThroughEOF'])
+                self.assertEqual(row['outcome'],'failure')
+
     def test_large_output_prefix_budget_does_not_truncate_original_stream(self):
         row, raw, stdout = self.run_child('import sys; sys.stdout.buffer.write(b"x"*(33*1024*1024))')
         self.assertEqual(len(raw), 32 * 1024 * 1024)

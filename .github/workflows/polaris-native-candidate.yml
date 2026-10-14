@@ -54,13 +54,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -B - <<'PYBUDGET'
+          runner_bash="$BASH"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            runner_bash="$(cygpath -w "$BASH")"
+          fi
+          test -n "$runner_bash"
+          POLARIS_RUNNER_BASH="$runner_bash" python -B - <<'PYBUDGET'
           import json, os, time
           from pathlib import Path
           path=Path(os.environ['RUNNER_TEMP'])/'polaris-ci-job-budget.json'
           path.write_text(json.dumps({'schema':'polaris-ci-job-budget-v1','startedMonotonic':time.monotonic(),
               'jobSeconds':7200,'evidenceReserveSeconds':900,'safetySeconds':60})+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('POLARIS_JOB_BUDGET='+str(path)+'\n')
+              stream.write('POLARIS_RUNNER_BASH='+os.environ['POLARIS_RUNNER_BASH']+'\n')
           PYBUDGET
       - name: Checkout producer revision
         timeout-minutes: 5
@@ -105,7 +112,7 @@ jobs:
           POLARIS_COMMAND
           python -B producer/scripts/polaris_ci_observe.py --phase historical-native \
             --output "$RUNNER_TEMP/polaris-ci/historical-native" --timeout-seconds 5400 \
-            -- bash --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-historical-native.sh"
+            -- "$POLARIS_RUNNER_BASH" --noprofile --norc -e -o pipefail "$RUNNER_TEMP/polaris-command-historical-native.sh"
       - name: Preserve candidate and receipts; never publish a release
         timeout-minutes: 5
         if: always()

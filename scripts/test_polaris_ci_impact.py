@@ -96,8 +96,11 @@ class ImpactTests(unittest.TestCase):
                 wrappers=[step for step in steps if 'polaris-command-' in step]
                 if not wrappers: continue
                 self.assertIn('Start shared job clock',steps[0])
+                self.assertIn('runner_bash=\"$BASH\"',steps[0])
+                self.assertIn('cygpath -w \"$BASH\"',steps[0])
+                self.assertIn("stream.write('POLARIS_RUNNER_BASH='",steps[0])
                 for step in wrappers:
-                    self.assertIn('-- bash --noprofile --norc -e -o pipefail',step)
+                    self.assertIn('-- \"$POLARIS_RUNNER_BASH\" --noprofile --norc -e -o pipefail',step)
                 uploads=[(i,s) for i,s in enumerate(steps) if 'upload-artifact@' in s]
                 caches=[(i,s) for i,s in enumerate(steps) if 'cache/save@' in s]
                 for i,cache in caches:
