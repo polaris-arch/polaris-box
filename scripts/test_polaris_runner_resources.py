@@ -19,16 +19,18 @@ class RunnerResourceTests(unittest.TestCase):
     def test_cpu_memory_and_system_reserves_bound_worker_budget(self):
         value = resources.budget(self.observation(), 'selfcheck')
         self.assertEqual(value['goPackageJobs'], 4)  # Memory, not eight CPUs, is limiting.
-        self.assertEqual(value['GOMAXPROCS'], 1)  # Do not multiply per-package CPU threads.
+        self.assertEqual(value['compileGOMAXPROCS'], 1)  # Applies to explicit compile commands only.
+        self.assertNotIn('GOMAXPROCS', value)
+        self.assertFalse(value['resourceReservationsHeld'])
         value = resources.budget(self.observation(effectiveCPUs=4, busyCPUObservation=0), 'desktop')
-        self.assertEqual((value['GOMAXPROCS'], value['goPackageJobs']), (3, 1))
+        self.assertEqual((value['compileGOMAXPROCS'], value['goPackageJobs']), (3, 1))
         value = resources.budget(self.observation(effectiveCPUs=4, busyCPUObservation=2.1), 'desktop')
-        self.assertEqual(value['GOMAXPROCS'], 1)
+        self.assertEqual(value['compileGOMAXPROCS'], 1)
 
     def test_busy_or_single_cpu_stays_bounded_without_zero_workers(self):
         for cpus, busy in [(1, 0), (2, 10)]:
             value = resources.budget(self.observation(effectiveCPUs=cpus, busyCPUObservation=busy), 'selfcheck')
-            self.assertEqual((value['GOMAXPROCS'], value['goPackageJobs']), (1, 1))
+            self.assertEqual((value['compileGOMAXPROCS'], value['goPackageJobs']), (1, 1))
 
     def test_inadequate_memory_or_disk_is_rejected_before_compilation(self):
         for changes, message in [({'memoryAvailableBytes': 2 * resources.GIB}, 'memory'),
@@ -66,7 +68,54 @@ class RunnerResourceTests(unittest.TestCase):
             stat = (f'Mach Virtual Memory Statistics: (page size of {page} bytes)\n'
                     'Pages free: 100.\nPages inactive: 200.\nPages speculative: 50.\nPages purgeable: 80.\n')
             with patch.object(resources.subprocess, 'check_output', side_effect=[str(16 * resources.GIB), stat]):
-                self.assertEqual(resources.darwin_memory(), (16 * resources.GIB, 300 * page))
+                self.assertEqual(resources.darwin_memory(), (16 * resources.GIB, 350 * page))
+
+    def test_speculative_pages_cross_real_admission_threshold_without_purgeable(self):
+        total = 8 * resources.GIB
+        threshold = max(resources.GIB, total // 5) + resources.MEMORY_PER_PACKAGE
+        for page in [4096, 16384]:
+            below_pages = (threshold - 1) // page
+            stat = (f'Mach Virtual Memory Statistics: (page size of {page} bytes)\n'
+                    f'Pages free: {below_pages // 2}.\n'
+                    f'Pages inactive: {below_pages - below_pages // 2}.\n'
+                    'Pages speculative: 1.\nPages purgeable: 1000000.\n')
+            with patch.object(resources.subprocess, 'check_output', side_effect=[str(total), stat]):
+                measured_total, available = resources.darwin_memory()
+            observation = self.observation(memoryTotalBytes=measured_total, memoryAvailableBytes=available)
+            self.assertGreaterEqual(available, threshold)
+            self.assertEqual(resources.budget(observation, 'desktop')['goPackageJobs'], 1)
+            with self.assertRaisesRegex(ValueError, 'memory'):
+                resources.budget({**observation, 'memoryAvailableBytes': available - page}, 'desktop')
+
+    def test_rejected_observation_survives_unwritable_scratch_without_logging_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = ['resources', '--kind', 'selfcheck', '--scratch', directory,
+                         '--output', str(root / 'report.json')]
+            observed = self.observation(diskFreeBytes=resources.GIB)
+            with patch('sys.argv', arguments), patch.object(resources, 'observe', return_value=observed), \
+                 patch.object(Path, 'write_text', side_effect=OSError('scratch unavailable')), \
+                 patch.dict(resources.os.environ, {'GITHUB_TOKEN': 'secret-test-marker'}), \
+                 patch('builtins.print') as printed:
+                with self.assertRaisesRegex(OSError, 'scratch unavailable'): resources.main()
+            value = json.loads(printed.call_args.args[0])
+            self.assertEqual(value['status'], 'rejected')
+            self.assertEqual(value['observation'], observed)
+            self.assertIn('insufficient runner scratch', value['error'])
+            self.assertTrue(printed.call_args.kwargs['flush'])
+            self.assertNotIn('secret-test-marker', printed.call_args.args[0])
+
+    def test_measurement_subprocess_failure_is_logged_before_reraise(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = ['resources', '--kind', 'selfcheck', '--scratch', directory,
+                         '--output', str(root / 'report.json')]
+            error = resources.subprocess.CalledProcessError(1, ['vm_stat'])
+            with patch('sys.argv', arguments), patch.object(resources, 'observe', side_effect=error), \
+                 patch('builtins.print') as printed:
+                with self.assertRaises(resources.subprocess.CalledProcessError): resources.main()
+            self.assertEqual(json.loads(printed.call_args.args[0])['status'], 'rejected')
+            self.assertEqual(printed.call_args.args[0], (root / 'report.json').read_text())
 
     def test_windows_cpu_sample_excludes_idle_kernel_time(self):
         class Call:
@@ -90,10 +139,14 @@ class RunnerResourceTests(unittest.TestCase):
                 resources.main()
             data = json.loads(report.read_text())
             self.assertEqual((data['workflowCommit'], data['sourceCommit']), ('a' * 40, 'b' * 40))
-            self.assertIn('GOMAXPROCS=1\nPOLARIS_GO_JOBS=4\nGOFLAGS=-p=4\n', env.read_text())
+            self.assertIn('POLARIS_COMPILE_GOMAXPROCS=1\nPOLARIS_GO_JOBS=4\nGOFLAGS=-p=4\n', env.read_text())
+            self.assertNotIn('\nGOMAXPROCS=', '\n' + env.read_text())
             before = env.read_bytes()
-            with patch('sys.argv', arguments), patch.object(resources, 'observe', return_value=self.observation(diskFreeBytes=resources.GIB)):
+            with patch('sys.argv', arguments), patch.object(resources, 'observe', return_value=self.observation(diskFreeBytes=resources.GIB)), \
+                 patch('builtins.print') as printed:
                 with self.assertRaisesRegex(ValueError, 'scratch'): resources.main()
+            self.assertEqual(printed.call_args.args[0], report.read_text())
+            self.assertTrue(printed.call_args.kwargs['flush'])
             self.assertEqual(env.read_bytes(), before)
             self.assertEqual(json.loads(report.read_text())['status'], 'rejected')
 
@@ -116,6 +169,11 @@ class RunnerResourceTests(unittest.TestCase):
         self.assertIn('git show "$GITHUB_SHA:scripts/polaris_runner_resources.py"', selfcheck)
         self.assertIn('if: ${{ inputs.run_instance_tests }}', selfcheck)
         self.assertIn('patch_only:', selfcheck)
+        self.assertIn('go test -p \"$POLARIS_GO_JOBS\" -parallel 2 -race', selfcheck)
+        for line in selfcheck.splitlines():
+            if ' go test ' in line or line.lstrip().startswith('go test '):
+                self.assertNotIn('POLARIS_COMPILE_GOMAXPROCS', line)
+        self.assertEqual(selfcheck.count('GOMAXPROCS=\"$POLARIS_COMPILE_GOMAXPROCS\"'), 7)
 
 
 if __name__ == '__main__':

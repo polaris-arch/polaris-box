@@ -376,7 +376,7 @@ def native(repo, source, expected, key, output):
     target(config, key)
     # Process-local isolation only; no global go env/config updates.
     os.environ.update(isolated_go_environment())
-    os.environ.update(GOMAXPROCS=os.environ.get('GOMAXPROCS', '2'), GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0',
+    os.environ.update(GOMAXPROCS='2', GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0',
                       GOOS=os_name, GOARCH=arch, CGO_ENABLED='1' if os_name == 'darwin' else '0')
     for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'CGO_CFLAGS', 'CGO_CPPFLAGS', 'CGO_CXXFLAGS', 'CGO_FFLAGS', 'CGO_LDFLAGS'):
         os.environ.pop(name, None)

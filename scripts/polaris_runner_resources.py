@@ -24,7 +24,8 @@ def linux_memory(root=Path('/')):
     entries = dict(re.findall(r'^(MemTotal|MemAvailable):\s+(\d+) kB$',
                               (root / 'proc/meminfo').read_text(), re.M))
     total, available = (int(entries[name]) * 1024 for name in ('MemTotal', 'MemAvailable'))
-    # A container's limit can be smaller than /proc/meminfo's host figures.
+    # Check only the visible root cgroup v2. Nested/v1 groups are not resolved.
+    # These measurements do not atomically reserve memory or disk.
     limit = root / 'sys/fs/cgroup/memory.max'
     current = root / 'sys/fs/cgroup/memory.current'
     if limit.exists() and current.exists() and limit.read_text().strip() != 'max':
@@ -53,10 +54,10 @@ def darwin_memory():
     total = int(subprocess.check_output(['sysctl', '-n', 'hw.memsize'], text=True))
     stat = subprocess.check_output(['vm_stat'], text=True)
     page = int(re.search(r'page size of (\d+) bytes', stat).group(1))
-    # Inactive pages are reclaimable; exclude wired/compressed memory and do
-    # not double-count speculative or purgeable subsets.
-    counts = dict(re.findall(r'^(Pages free|Pages inactive):\s+(\d+)\.', stat, re.M))
-    available = sum(int(counts[name]) for name in ('Pages free', 'Pages inactive')) * page
+    # vm_stat prints free_count minus speculative_count. Add speculative
+    # pages back, plus inactive pages; purgeable can overlap and is not added.
+    counts = dict(re.findall(r'^(Pages free|Pages inactive|Pages speculative):\s+(\d+)\.', stat, re.M))
+    available = sum(int(counts[name]) for name in ('Pages free', 'Pages inactive', 'Pages speculative')) * page
     return total, min(total, available)
 
 
@@ -137,10 +138,20 @@ def budget(observation, kind):
     packages = threads if kind == 'selfcheck' else 1
     return {'schema': 'polaris-runner-resource-budget-v1', 'kind': kind,
             'observation': observation, 'cpuWorkerBudget': threads,
-            'GOMAXPROCS': 1 if kind == 'selfcheck' else threads, 'goPackageJobs': packages,
+            'compileGOMAXPROCS': 1 if kind == 'selfcheck' else threads, 'goPackageJobs': packages,
+            'testRuntimePolicy': 'unchanged; do not export a job-wide GOMAXPROCS or change test -parallel',
             'memoryReserveBytes': memory_reserve, 'memoryPerPackageBytes': MEMORY_PER_PACKAGE,
+            'resourceReservationsHeld': False,
             'diskReserveBytes': disk_reserve, 'workingSpaceBudgetBytes': GROWTH[kind],
-            'scope': 'this isolated runner; initial admission snapshot; no account or fleet capacity claim'}
+            'scope': 'this runner; sampled estimates, not reserved resources; Linux root cgroup v2 only, nested/v1 not guaranteed; no account or fleet capacity claim'}
+
+
+def emit_report(path, result):
+    # Fixed resource fields only: never dump environment, GOFLAGS or secrets.
+    # Log first, so rejected admission survives even an unwritable scratch file.
+    encoded = json.dumps(result, indent=2) + '\n'
+    print(encoded, end='', flush=True)
+    path.write_text(encoded)
 
 
 def main():
@@ -160,15 +171,14 @@ def main():
         result.update(workflowCommit=os.environ.get('GITHUB_SHA'),
                       sourceCommit=os.environ.get('SOURCE_COMMIT'),
                       toolSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
-    except (OSError, ValueError, KeyError, AttributeError) as error:
-        args.output.write_text(json.dumps({'status': 'rejected', 'observation': measured,
-                                          'error': str(error)}, indent=2) + '\n')
+    except (OSError, ValueError, KeyError, AttributeError, subprocess.SubprocessError) as error:
+        emit_report(args.output, {'status': 'rejected', 'observation': measured,
+                                 'error': str(error)[:2048]})
         raise
-    args.output.write_text(json.dumps(result, indent=2) + '\n')
-    print(args.output.read_text(), end='')
+    emit_report(args.output, result)
     if args.github_env:
         with args.github_env.open('a') as stream:
-            stream.write(f"GOMAXPROCS={result['GOMAXPROCS']}\nPOLARIS_GO_JOBS={result['goPackageJobs']}\n")
+            stream.write(f"POLARIS_COMPILE_GOMAXPROCS={result['compileGOMAXPROCS']}\nPOLARIS_GO_JOBS={result['goPackageJobs']}\n")
             if args.kind == 'selfcheck':
                 # Source/test tags and ldflags are untouched; cap package jobs
                 # for go run/install and gomobile's descendant Go invocations.

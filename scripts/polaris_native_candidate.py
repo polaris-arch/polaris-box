@@ -255,7 +255,7 @@ def build_native(options, producer, manifest):
         raise ValueError('source tree differs from manifest')
     if run(['git', 'status', '--porcelain=v1', '--untracked-files=all'], source):
         raise ValueError('source checkout is dirty')
-    env = dict(os.environ, GOTOOLCHAIN='local', GOMAXPROCS=os.environ.get('GOMAXPROCS', '2'), CGO_ENABLED='1' if host_os == 'darwin' else '0',
+    env = dict(os.environ, GOTOOLCHAIN='local', GOMAXPROCS='2', CGO_ENABLED='1' if host_os == 'darwin' else '0',
                GOOS=host_os, GOARCH=host_arch)
     go_info = json.loads(run(['go', 'env', '-json', 'GOVERSION', 'GOHOSTOS', 'GOHOSTARCH', 'CC'], source, env))
     if go_info['GOVERSION'] != 'go' + manifest['Go'] or (go_info['GOHOSTOS'], go_info['GOHOSTARCH']) != (host_os, host_arch):
@@ -325,7 +325,8 @@ def build_native(options, producer, manifest):
     command = ['go', 'build', '-mod=readonly', '-p', '1', '-trimpath', '-tags', tags, '-ldflags', flags, '-o', str(binary), './cmd/sing-box']
     if manifest.get('buildVCS'):
         command.insert(2, '-buildvcs=true')
-    run(command, source, env)
+    build_env = dict(env, GOMAXPROCS=os.environ.get('POLARIS_COMPILE_GOMAXPROCS', env['GOMAXPROCS']))
+    run(command, source, build_env)
     diagnostics_env = dict(env)
     for key in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'DYLD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES'):
         diagnostics_env.pop(key, None)

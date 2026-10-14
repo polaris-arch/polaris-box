@@ -332,7 +332,7 @@ def core_build(repo, source, expected, architecture, cache, output):
     goarch, machine, isa_name, isa, flags = ARCHITECTURES[architecture]
     triple = ('x86_64' if goarch == 'amd64' else 'aarch64') + '-openwrt-linux-musl'
     env = isolated_go_environment();env.update(GOOS='linux', GOARCH=goarch, CGO_ENABLED='1',
-        GOMAXPROCS=os.environ.get('GOMAXPROCS', '2'), GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0', STAGING_DIR=str(Path(sdk['root'])/'staging_dir'))
+        GOMAXPROCS='2', GOEXPERIMENT='', GOAMD64='v1', GOARM64='v8.0', STAGING_DIR=str(Path(sdk['root'])/'staging_dir'))
     for name in ['CGO_CPPFLAGS', 'CGO_FFLAGS', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'LD_PRELOAD', 'LD_LIBRARY_PATH']:
         env.pop(name, None)
     for name, compiler in [('CC', 'clang'), ('CXX', 'clang++')]:
@@ -354,7 +354,8 @@ def core_build(repo, source, expected, architecture, cache, output):
     core = output/'sing-box';command=[go,'build','-buildvcs=true','-mod=readonly','-p','1','-trimpath','-tags',tags,'-ldflags',ldflags,'-o',core,'./cmd/sing-box']
     (output/'BUILD-INPUT.json').write_bytes(encode({'sourceCommit':expected,'sourceTree':tree,'command':[str(x) for x in command],
         'env':{k:env[k] for k in ['CC','CXX','CGO_CFLAGS','CGO_CXXFLAGS','CGO_LDFLAGS','GOOS','GOARCH','GOAMD64','GOARM64','CGO_ENABLED','STAGING_DIR']},'sdk':sdk,'clang':clang,'goExecutableSha256':file_info(go)['sha256']}))
-    try:log=run(command,source,env)
+    build_env=dict(env,GOMAXPROCS=os.environ.get('POLARIS_COMPILE_GOMAXPROCS',env['GOMAXPROCS']))
+    try:log=run(command,source,build_env)
     except RuntimeError as error:(output/'build.log').write_text(str(error)+'\n');raise
     (output/'build.log').write_text(log);elf=check_static(core,architecture)
     info=run([go,'version','-m',core]);graph=build_info(info,expected,'linux/'+goarch,expected_cgo='1')
