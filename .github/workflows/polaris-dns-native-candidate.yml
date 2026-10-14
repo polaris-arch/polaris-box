@@ -6,8 +6,10 @@ permissions:
 concurrency:
   group: polaris-dns-native-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 jobs:
   native_cli:
+    timeout-minutes: 120
     name: DNS native ${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -20,6 +22,7 @@ jobs:
           - {os: darwin, arch: amd64, tool_arch: x64, runner: macos-15-intel}
           - {os: darwin, arch: arm64, tool_arch: arm64, runner: macos-15}
     env:
+      SOURCE_COMMIT: 'aafc521b745e0d1a8f50a6a3f41169433f1c2194'
       PYTHONDONTWRITEBYTECODE: '1'
       GOMAXPROCS: '2'
       GOENV: 'off'
@@ -53,22 +56,31 @@ jobs:
           python-version: '3.12'
           architecture: ${{ matrix.tool_arch }}
       - name: Build fixed source; native mocks, BuildInfo, Cronet and package readback
+        timeout-minutes: 92
         shell: bash
         env:
           CANDIDATE_OS: ${{ matrix.os }}
           CANDIDATE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
+          cat > "$RUNNER_TEMP/polaris-command-historical-native.sh" <<'POLARIS_COMMAND'
+          set -euo pipefail
           python producer/scripts/polaris_dns_native_candidate.py \
             --source "$GITHUB_WORKSPACE/source" \
             --output "$RUNNER_TEMP/polaris-dns-native" \
             --expected-producer-head "$GITHUB_SHA" \
             --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH"
+          POLARIS_COMMAND
+          python -B producer/scripts/polaris_ci_observe.py --phase historical-native \
+            --output "$RUNNER_TEMP/polaris-ci/historical-native" --timeout-seconds 5400 \
+            -- bash "$RUNNER_TEMP/polaris-command-historical-native.sh"
       - name: Preserve actual binaries and evidence; never publish
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: polaris-box-dns-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/polaris-dns-native
+          path: |
+            ${{ runner.temp }}/polaris-dns-native
+            ${{ runner.temp }}/polaris-ci
           if-no-files-found: warn
           retention-days: 3

@@ -28,6 +28,10 @@ from polaris_dns_identity import canonical
 CONFIG = 'release/polaris-production-release.json'
 UPSTREAM_DELTA = {'.github/workflows/build.yml', 'docs/changelog.md'}
 CHANGES = {'.github/workflows/polaris-production-native.yml',
+           '.github/workflows/polaris-native-candidate.yml', '.github/workflows/polaris-dns-native-candidate.yml',
+           'scripts/polaris_ci_impact.py', 'scripts/test_polaris_ci_impact.py',
+           'scripts/polaris_ci_downloads.py', 'scripts/test_polaris_ci_downloads.py',
+           'scripts/polaris_ci_observe.py', 'scripts/test_polaris_ci_observe.py',
            'scripts/polaris_runner_resources.py', 'scripts/test_polaris_runner_resources.py',
            '.github/workflows/polaris-selfcheck.yml', 'release/POLARIS_ASSETS.md',
            'release/polaris-fork-maintenance.json', 'release/POLARIS_FORK_MAINTENANCE.md',

@@ -8,11 +8,13 @@ on:
         default: false
 env:
   PYTHONDONTWRITEBYTECODE: '1'
+  SOURCE_COMMIT: ${{ github.sha }}
 permissions:
   contents: read
 concurrency:
   group: polaris-production-release-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 jobs:
   plan:
     if: github.repository == 'polaris-arch/polaris-box'
@@ -43,6 +45,7 @@ jobs:
             --kind contracts --scratch "$RUNNER_TEMP" \
             --output "$RUNNER_TEMP/contract-runner-budget.json" --github-env "$GITHUB_ENV"
       - name: Whole-batch source contracts and regressions
+        timeout-minutes: 62
         shell: bash
         env:
           GOENV: 'off'
@@ -53,8 +56,14 @@ jobs:
           GOCACHE: ${{ runner.temp }}/batch-test-gocache
         run: |
           set -euo pipefail
+          cat > "$RUNNER_TEMP/polaris-command-production-contracts.sh" <<'POLARIS_COMMAND'
+          set -euo pipefail
           python3 -B producer/scripts/polaris_fork_maintenance.py --source "$GITHUB_SHA" > "$RUNNER_TEMP/fork-maintenance-audit.json"
           python3 -B -m unittest discover -s producer/scripts -p 'test_polaris_*.py' -v 2>&1 | tee "$RUNNER_TEMP/whole-batch-contracts.log"
+          POLARIS_COMMAND
+          python -B producer/scripts/polaris_ci_observe.py --phase production-contracts \
+            --output "$RUNNER_TEMP/polaris-ci/production-contracts" --timeout-seconds 3600 \
+            -- bash "$RUNNER_TEMP/polaris-command-production-contracts.sh"
       - name: Preserve batch contract results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -64,6 +73,7 @@ jobs:
             ${{ runner.temp }}/whole-batch-contracts.log
             ${{ runner.temp }}/fork-maintenance-audit.json
             ${{ runner.temp }}/contract-runner-budget.json
+            ${{ runner.temp }}/polaris-ci
           if-no-files-found: warn
       - id: plan
         shell: bash
@@ -141,15 +151,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-user e2fsprogs openssh-client openssl
       - name: Actual official guest package and runtime gates
+        timeout-minutes: 47
         shell: bash
         env:
           OPENWRT_ARCH: ${{ matrix.architecture }}
           PACKAGE_FORMAT: ${{ matrix.format }}
         run: |
           set -euo pipefail
+          cat > "$RUNNER_TEMP/polaris-command-production-guest.sh" <<'POLARIS_COMMAND'
+          set -euo pipefail
           python3 -B producer/scripts/polaris_openwrt_guest.py \
             --expected-head "$GITHUB_SHA" --architecture "$OPENWRT_ARCH" --format "$PACKAGE_FORMAT" \
             --inputs "$RUNNER_TEMP/openwrt-inputs" --output "$RUNNER_TEMP/openwrt-guest"
+          POLARIS_COMMAND
+          python -B producer/scripts/polaris_ci_observe.py --phase production-guest \
+            --output "$RUNNER_TEMP/polaris-ci/production-guest" --timeout-seconds 2700 \
+            -- bash "$RUNNER_TEMP/polaris-command-production-guest.sh"
       - name: Preserve guest receipts and failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -157,6 +174,7 @@ jobs:
           name: polaris-box-openwrt-guest-${{ matrix.architecture }}-${{ matrix.format }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/openwrt-guest/guest-receipt.json
+            ${{ runner.temp }}/polaris-ci
             ${{ runner.temp }}/openwrt-guest/GUEST-FAILURE.json
             ${{ runner.temp }}/openwrt-guest/REPOSITORY-PREPARATION.json
             ${{ runner.temp }}/openwrt-guest/*.log
@@ -195,25 +213,35 @@ jobs:
           pattern: polaris-box-openwrt-guest-*-${{ github.run_id }}
           path: ${{ runner.temp }}/guest-inputs
       - name: Assemble same-run twelve assets and fixed public source references
+        timeout-minutes: 92
         shell: bash
         run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/polaris-command-production-assemble.sh" <<'POLARIS_COMMAND'
           set -euo pipefail
           python3 -B producer/scripts/polaris_production_release.py assemble \
             --expected-head "$GITHUB_SHA" --inputs "$RUNNER_TEMP/native-inputs" \
             --openwrt-inputs "$RUNNER_TEMP/openwrt-inputs" --guest-inputs "$RUNNER_TEMP/guest-inputs" \
             --output "$RUNNER_TEMP/polaris-production-final"
+          POLARIS_COMMAND
+          python -B producer/scripts/polaris_ci_observe.py --phase production-assemble \
+            --output "$RUNNER_TEMP/polaris-ci/production-assemble" --timeout-seconds 5400 \
+            -- bash "$RUNNER_TEMP/polaris-command-production-assemble.sh"
       - name: Preserve full-byte source availability checks and failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: polaris-box-public-source-${{ github.run_id }}
-          path: ${{ runner.temp }}/public-source-check/*.json
+          path: |
+            ${{ runner.temp }}/public-source-check/*.json
+            ${{ runner.temp }}/polaris-ci
           if-no-files-found: warn
           retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: polaris-box-production-final-${{ github.run_id }}
           path: ${{ runner.temp }}/polaris-production-final
+          compression-level: 0
           if-no-files-found: error
           retention-days: 14
   provenance:

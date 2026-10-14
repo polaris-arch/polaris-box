@@ -12,8 +12,10 @@ permissions:
 concurrency:
   group: polaris-native-candidate-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 jobs:
   select_targets:
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -27,6 +29,7 @@ jobs:
           CANDIDATE_PLATFORM: ${{ inputs.platform }}
         run: python3 producer/scripts/polaris_native_matrix.py
   native_cli:
+    timeout-minutes: 120
     needs: select_targets
     name: Native ${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -36,6 +39,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.select_targets.outputs.matrix) }}
     env:
+      SOURCE_COMMIT: 'a01da7a942b3a0dbbfdfda2bba5bd63d5bd9d932'
       GOTOOLCHAIN: local
       GOMAXPROCS: '2'
       # Apply before both checkouts; byte-pinned licenses must remain Git blob bytes.
@@ -68,21 +72,30 @@ jobs:
           # Go host and final PE machine are independently checked by the script.
           architecture: ${{ matrix.os == 'windows' && 'x64' || matrix.tool_arch }}
       - name: Build, inspect, load, package and reload on native host
+        timeout-minutes: 92
         shell: bash
         env:
           CANDIDATE_OS: ${{ matrix.os }}
           CANDIDATE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
+          cat > "$RUNNER_TEMP/polaris-command-historical-native.sh" <<'POLARIS_COMMAND'
+          set -euo pipefail
           python producer/scripts/polaris_native_candidate.py \
             --source "$GITHUB_WORKSPACE/source" \
             --output "$RUNNER_TEMP/polaris-native-candidate" \
             --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH"
+          POLARIS_COMMAND
+          python -B producer/scripts/polaris_ci_observe.py --phase historical-native \
+            --output "$RUNNER_TEMP/polaris-ci/historical-native" --timeout-seconds 5400 \
+            -- bash "$RUNNER_TEMP/polaris-command-historical-native.sh"
       - name: Preserve candidate and receipts; never publish a release
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: polaris-box-candidate-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/polaris-native-candidate
+          path: |
+            ${{ runner.temp }}/polaris-native-candidate
+            ${{ runner.temp }}/polaris-ci
           if-no-files-found: warn
           retention-days: 3

@@ -47,3 +47,105 @@ The build workflow has read-only repository permissions and never tags or publis
 Explicit `stage-draft` creates only the new exact tag and draft, `resume-*` uploads missing immutable assets only. Draft metadata may use one observed bounded GitHub `untagged-<hex>` URL component; repository/name/ID/digest and tag-object identity remain strict. `publish` PATCH explicitly pins `tag_name` and source `target_commitish`, requires the exact complete inspected draft, and public URLs must all be canonical. All twelve final public assets are downloaded anonymously and checked in full against the frozen expected sizes/hashes; release/asset IDs and canonical URLs are captured with tag/source/tree before and after readback. `consumerContract` projects the original four App rows with actual published index/asset IDs and keeps App/mobile/device/signature trust pending. New production App pins are separately owned by the App integrator and must originate from these final bytes.
 
 Existing in-use tags/releases remain available until the actual consumer migration closes. No automatic cleanup, tag movement, upstream write, deployment or physical-network change is part of this producer/publisher.
+
+
+## Complete CI workflow coverage and acquisition efficiency
+
+The reviewed `a635e534` scheduling baseline remains intact. Its complete successful
+production run measured 24m14s versus the original 57m58s; different temporary
+hosted machines and times prevent treating that comparison as a controlled
+benchmark. The eight native inputs, independent OpenWrt guest dependency, resource
+fallback and self-check tip/audit cancellation groups are retained.
+
+All eleven current workflows are accounted for below. Retention is an explicit
+coverage decision, not an omitted flow. The six inherited files remain byte
+identical to `a635e534`; their GitHub API state at this batch's inventory was
+`disabled_manually`. This batch does not enable them or change their publishing,
+maintenance, credentials or permissions. Source `build.yml` and `docs/changelog.md`
+continue to require the exact upstream blobs in production admission.
+
+| Workflow | Purpose and decision |
+| --- | --- |
+| `build.yml` | stable/testing/unstable and thirteen manual build choices; 38 binary variants, mobile libraries and external client/signing/publication inputs differ from Polaris production. Retain unchanged. |
+| `lint.yml` | four upstream PR/push branches and ten target lint profiles using their original toolchain. Retain; not a duplicate of polaris-main self-check. |
+| `test.yml` | four upstream PR/push branches, three OS x two Go versions, different tags and privileged/native tests. Retain all compatibility coverage. |
+| `docker.yml` | release/manual image publication; all jobs are SagerNet-only and skipped on this fork. Retain unchanged; no fork runner saving to claim. |
+| `linux.yml` | upstream signed Linux packages; all jobs are SagerNet-only and skipped on this fork. Retain unchanged. |
+| `stale.yml` | scheduled issue/PR maintenance without compilation. Retain behavior and disabled state. |
+| `polaris-native-candidate.yml` | historical manual selected targets from fixed a01 source, original cap2 and native/package checks. Keep inputs; add bounded pending queue, deadline and failure observations. |
+| `polaris-dns-native-candidate.yml` | historical manual four-core DNS diagnostics from fixed aafc source, original cap1/mocks/Cronet/BuildInfo checks. Keep inputs; add bounded pending queue, deadline and observations. |
+| `polaris-selfcheck.yml` | current or historical source/role/symbol/baseline/instance checks. Keep real execution; cache only the fixed NDK archive, classify narrowly audited prose on automatic main tips, preserve bounded observations on every path. |
+| `polaris-production-native.yml` | same-source six desktop and two musl producers. Restore/save only byte-pinned SDK/Clang archives, freshly extract and reverify; all actual build/native/package/source checks remain. Stream handoff hashes and preserve observations outside the archives. |
+| `polaris-production-release.yml` | whole contracts, eight native producers, four guests, exact same-run twelve assets/source checks and optional main-only attestation. Keep all gates; bounded pending queue, command observations and zero outer compression for already-compressed final archives. |
+
+### Cache authority and finite inputs
+
+Only immutable compressed acquisition inputs are added to the cache: one NDK
+archive, three OpenWrt SDK archives and one common Clang archive. Keys bind the
+actual content SHA-256, host OS and architecture; no source SHA creates another
+copy of an identical download. The common APK-host SDK and Clang archive share
+their content keys across the two OpenWrt targets. NDK is bounded at2GiB, each SDK
+at512MiB and Clang at its exact56,889,948 bytes. Cache hits never stand in for
+compilation, test success, raw binary identity, a producer receipt or public source
+availability. SDK/Clang consumers still hash the archives and extract into fresh
+private roots; NDK is hashed before fresh unzip. No extracted compiler, patched
+GOROOT, success result or current-run handoff is cached.
+
+The existing setup-go implementation remains pinned and its dependency inputs
+explicitly include the root and local replacement go.mod/go.sum. Its compiler
+cache remains governed by Go's actual tool/input IDs; original -count=1/race,
+tags and instance opt-in tests are not skipped on a hit. Optional input-cache
+restore/save failures fall back to the original verified acquisition path; an
+actual corrupt cached input fails before use; regular failed bytes within the declared archive limits are retained, and oversized/nonregular retention gaps are explicitly recorded. Source/network
+availability gates always make their original fresh public reads.
+
+The current repository cache inventory was21 entries/8,362,233,928 bytes. This
+batch adds at most five keys for the current pinned archives and does not raise
+paid cache limits, delete another owner’s evidence, add a cache-GC permission or
+build a cache service. Existing GitHub cache scope/quota/eviction rules still
+apply. Cold/warm/corrupt/missing/oversized/symlink controls are part of the one
+whole contract gate; they do not certify an unmeasured warm-run speedup.
+
+### Conservative prose classification
+
+Only `release/POLARIS_PRODUCTION_RELEASE.md`, an instruction guide not read by the
+runtime/build/schema/install or NOTICE generators, is currently allowlisted for
+skipping Go jobs on an automatic `polaris-main` push. The classification job and
+its negative controls still execute. All other docs and Markdown, including the
+licensed root README, docs schemas/install scripts, NOTICE/LICENSE, source-owned
+release inputs/licenses, Go modules/replacement, workflows and unknown paths,
+require full validation. Missing/forced/deleted/malformed context, unavailable
+before objects, dirty checkout, unsafe file modes, non-prose or possible Go embed
+inputs also keep full validation. Manual audits, tags, source-role/symbol/base
+changes and instance opt-in always preserve the original applicable Go jobs.
+Production/attestation never use this prose classification to omit a gate.
+
+### Deadlines, observations and fixed pending inputs
+
+Each owned command keeps its original shell, arguments and environment inside an
+observed phase; it is not replaced by a cached result. Bounded periodic heartbeats
+and stdout/stderr streaming make a long phase observable. Per-command deadlines
+leave time inside the job budget to preserve failure evidence. Failure codes and
+cancel signals propagate. Only the invocation's own POSIX process group or
+Windows PID tree is terminated; this is not a global process/image kill.
+
+The extra command artifact retains a32MiB prefix with its truncation status while
+the original GitHub job log receives the complete stream and the observer hashes
+all bytes. OS child ru_maxrss (Unix) or direct-child peak working set (Windows)
+is recorded when available, null otherwise; neither is simultaneous descendant
+RSS sum nor a continuous memory reservation. The existing per-runner compile
+budget and test runtime policy are unchanged. Observations are outside product
+archives and never rewrite producer/provider/raw signature identities.
+
+Three fixed manual workflows use the official `queue: max` with cancellation
+false, allowing up to100pending submissions per ref group. A full queue cancels
+excess requests; FIFO is based on beginning to wait, not dispatch ordering.
+Self-check's existing run-specific fixed-audit and replaceable automatic-tip
+concurrency groups remain unchanged. No extra runs are dispatched merely to
+benchmark caching/queueing. In-flight accurate runs are not cancelled or relabeled.
+
+The complete implementation is reviewed once as a whole candidate and validated
+with the necessary exact-source remote gates. No local compile/project tests,
+per-item CI, release/tag changes, paid runners or permission expansion accompany
+this efficiency batch. Formal App/mobile carriers, real devices, distribution
+signature trust and mesh root cause remain separately owned acceptance boundaries.
